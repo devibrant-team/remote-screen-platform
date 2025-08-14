@@ -1,0 +1,79 @@
+{
+  "name": "windows",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Windows Screen Iguana",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "concurrently -k \"npm:tsc:watch\" \"npm:electron:start\"",
+    "tsc:build": "tsc -p electron/tsconfig.json && node scripts/rename-electron-outputs.cjs",
+    "tsc:watch": "tsc -p electron/tsconfig.json --watch",
+    "electron:start": "wait-on http://localhost:5173 dist-electron/main.cjs && cross-env ELECTRON_START_URL=http://localhost:5173 electron dist-electron/main.cjs",
+    "build:web": "vite build",
+    "pack": "npm run build:web && npm run tsc:build && electron-builder --win nsis",
+    "build": "npm run pack",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.8.2",
+    "@tailwindcss/vite": "^4.1.12",
+    "@tanstack/react-query": "^5.85.3",
+    "@tanstack/react-query-devtools": "^5.85.3",
+    "electron-store": "^10.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-redux": "^9.2.0",
+    "tailwindcss": "^4.1.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@types/plist": "^3.0.5",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/verror": "^1.10.11",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.0",
+    "cross-env": "^10.0.0",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9.33.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.3.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.39.1",
+    "vite": "^7.1.2",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "com.devibrant.windows-iguana",
+    "productName": "Windows Screen Iguana",
+    "artifactName": "Windows-Screen-Iguana-Setup-${version}.${ext}",
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "dist-electron/main.cjs"
+    },
+    "directories": {
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
