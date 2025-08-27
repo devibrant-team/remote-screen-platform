@@ -1,114 +1,74 @@
 import React from "react";
-import { useSelector } from "react-redux";
-import type { RootState } from "../../store";
 
-const pill = (ok: boolean) =>
-  ok
-    ? "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200"
-    : "bg-amber-100 text-amber-700 ring-1 ring-amber-200";
-
-export default function HomeScreen() {
-  const screenId = useSelector((s: RootState) => s.app.screenId);
-  const code = useSelector((s: RootState) => s.app.code);
-
-  const lsLinked = typeof window !== "undefined" && localStorage.getItem("linked") === "1";
-  const lsScreenId = typeof window !== "undefined" ? localStorage.getItem("screenId") ?? "—" : "—";
-  const lsCode = typeof window !== "undefined" ? localStorage.getItem("code") ?? "—" : "—";
-
-  const isRegistered = Boolean(screenId ?? lsScreenId !== "—");
-  const isLinked = lsLinked;
-
+const HomeScreen: React.FC = () => {
   return (
-<main className="w-full h-full min-h-screen bg-gradient-to-br from-slate-50 to-white">
-      {/* Header (full width) */}
-      <header className="w-full px-8 py-6 border-b bg-white/70 backdrop-blur sticky top-0 z-20">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold tracking-tight">Device Dashboard</h1>
-            <p className="text-sm text-slate-600">Status & diagnostics for this screen</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className={`px-3 py-1 rounded-full text-sm ${pill(isRegistered)}`}>
-              {isRegistered ? "Registered" : "Not Registered"}
-            </span>
-            <span className={`px-3 py-1 rounded-full text-sm ${pill(isLinked)}`}>
-              {isLinked ? "Linked" : "Waiting to Link"}
-            </span>
-          </div>
-        </div>
-      </header>
+    <main className="relative min-h-screen overflow-hidden bg-white">
+      {/* Soft red glow */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(65%_35%_at_50%_0%,rgba(239,68,68,0.10),transparent_60%)]" />
 
-      {/* Content (full width grid) */}
-      <section className="w-full px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Identity card */}
-          <div className="lg:col-span-4 p-6 rounded-2xl border bg-white shadow-sm">
-            <h2 className="text-lg font-semibold">Identity</h2>
-            <dl className="mt-4 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <dt className="text-slate-600">Redux screenId</dt>
-                <dd className="font-mono">{screenId ?? "—"}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-600">Redux code</dt>
-                <dd className="font-mono">{code ?? "—"}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-600">LocalStorage screenId</dt>
-                <dd className="font-mono">{lsScreenId}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-600">LocalStorage code</dt>
-                <dd className="font-mono">{lsCode}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-600">Linked</dt>
-                <dd className="font-mono">{isLinked ? "true" : "false"}</dd>
-              </div>
-            </dl>
-          </div>
+      {/* Floating confetti */}
+      <div className="pointer-events-none absolute inset-0">
+        {Array.from({ length: 18 }).map((_, i) => (
+          <span
+            key={i}
+            className="absolute h-2 w-2 rounded-sm bg-red-500/70"
+            style={{
+              left: `${(i * 53) % 100}%`,
+              top: `${(i * 37) % 100}%`,
+              transform: `rotate(${i * 20}deg)`,
+              animation: `floaty ${6 + (i % 5)}s ease-in-out ${(i % 4) * 0.4}s infinite`,
+            }}
+          />
+        ))}
+      </div>
 
-          {/* Quick actions */}
-          <div className="lg:col-span-8 p-6 rounded-2xl border bg-white shadow-sm">
-            <h2 className="text-lg font-semibold">Quick Actions</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              Use this area while testing registration/link flow.
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                className="px-4 py-2 rounded-xl border bg-white hover:bg-slate-50 text-slate-800"
-                onClick={() => window.location.reload()}
+      {/* Center card */}
+      <section className="relative z-10 mx-auto flex min-h-screen max-w-3xl items-center justify-center p-6">
+        <div className="w-full rounded-2xl border border-red-500/20 bg-white/80 p-8 shadow-[0_10px_40px_-10px_rgba(239,68,68,0.35)] backdrop-blur">
+          {/* Badge */}
+          <div className="mb-6 flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow">
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
               >
-                Reload App
-              </button>
-              <button
-                className="px-4 py-2 rounded-xl border bg-white hover:bg-slate-50 text-slate-800"
-                onClick={() => alert("Navigate to your player route when ready")}
-              >
-                Open Player (stub)
-              </button>
+                <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </div>
-
-            {code && (
-              <div className="mt-6">
-                <p className="text-slate-600 text-sm">Pairing code</p>
-                <div className="mt-2 text-5xl font-bold tracking-widest">
-                  {String(code).padStart(6, "0")}
-                </div>
-              </div>
-            )}
+            <span className="rounded-full border border-red-500/30 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-red-500">
+              Success
+            </span>
           </div>
 
-          {/* Notes (full width row) */}
-          <div className="lg:col-span-12 p-6 rounded-2xl border bg-white shadow-sm">
-            <h2 className="text-lg font-semibold">Notes</h2>
-            <ul className="mt-3 list-disc pl-5 text-sm text-slate-700 space-y-1">
-              <li><span className="font-medium">Registered</span> means the device has a screenId.</li>
-              <li><span className="font-medium">Linked</span> means a matching <code>.ScreenLinked</code> event was received.</li>
-            </ul>
-          </div>
+          {/* Title */}
+          <h1 className="text-4xl font-black leading-tight tracking-tight text-red-500 drop-shadow-sm sm:text-5xl">
+            Welcome to <span className="underline decoration-red-500/30">Iguana</span>
+          </h1>
+
+          {/* Subtitle */}
+          <p className="mt-3 text-base text-neutral-700 sm:text-lg">
+            Your screen has been added <span className="font-semibold text-red-500">successfully</span>!
+          </p>
         </div>
       </section>
+
+      {/* Decorative corner ribbons */}
+      <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rotate-12 bg-red-500/10 blur-2xl" />
+      <div className="pointer-events-none absolute -bottom-10 -right-10 h-40 w-40 -rotate-12 bg-red-500/10 blur-2xl" />
+
+      {/* Keyframes */}
+      <style>{`
+        @keyframes floaty {
+          0% { transform: translateY(0) rotate(0deg); opacity: 0.9; }
+          50% { transform: translateY(-10px) rotate(6deg); opacity: 1; }
+          100% { transform: translateY(0) rotate(0deg); opacity: 0.9; }
+        }
+      `}</style>
     </main>
   );
-}
+};
+
+export default HomeScreen;
