@@ -1,4 +1,4 @@
-// src/features/screens/useCreateScreen.ts
+//src/ReactQuery/CreateScreen/CreateScreen.ts
 import axios, { AxiosError } from "axios";
 import { useMutation, type UseMutationOptions } from "@tanstack/react-query";
 import { CreateScreenApi } from "../../Api/Api"; // e.g. "http://.../api/screens"

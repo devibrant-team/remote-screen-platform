@@ -1,72 +1,92 @@
-import React from "react";
+// src/pages/HomeScreen.tsx
+import "swiper/css";
+import "swiper/css/effect-fade";
+
+import React, { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import PlaylistPlayer from "../features/schedule/components/PlaylistPlayer";
+import { useScreenId } from "../features/schedule/hooks/useScreenId";
+import { echo, ReverbConnection } from "../echo";
+import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlaylist";
+import { setNowPlaying } from "../utils/playlistCache";
+
+type ScheduleUpdatePayload = { scheduleId?: number | string } & Record<string, unknown>;
 
 const HomeScreen: React.FC = () => {
+  const qc = useQueryClient();
+  const { screenId } = useScreenId();
+  const { activeScheduleId, decision, isLoading, quietRefreshAll } = useResolvedPlaylist(screenId);
+
+  // Keep latest IDs to avoid stale closures
+  const latest = useRef<{ screenId?: string | number; scheduleId?: string | number }>({});
+  useEffect(() => {
+    latest.current = { screenId, scheduleId: activeScheduleId };
+  }, [screenId, activeScheduleId]);
+
+  // Persist the playlist that’s actually shown (for offline keep-running case)
+  useEffect(() => {
+    if (decision.source === "child" || decision.source === "default") {
+      setNowPlaying(decision.source, decision.playlist);
+    }
+  }, [decision.source, decision.playlist]);
+
+  const quietRefresh = async (overrideScheduleId?: number | string | null) => {
+    await quietRefreshAll(overrideScheduleId ?? latest.current.scheduleId ?? null);
+  };
+
+  // Reverb events
+  useEffect(() => {
+    if (!screenId) return;
+    const channelName = `screens.${screenId}`;
+    const channel = echo.channel(channelName);
+
+    const on = (label: string) => async (payload: ScheduleUpdatePayload) => {
+      const sid = payload?.scheduleId ?? latest.current.scheduleId ?? null;
+      await quietRefresh(sid);
+    };
+
+    channel.listen(".ScheduleUpdate", on("ScheduleUpdate"));
+    channel.listen(".PlaylistReload", on("PlaylistReload"));
+
+    const off = ReverbConnection.onStatus((s) => {
+      if (s === "connected") {
+        try { echo.leave(channelName); } catch {}
+        const c = echo.channel(channelName);
+        c.listen(".ScheduleUpdate", on("ScheduleUpdate"));
+        c.listen(".PlaylistReload", on("PlaylistReload"));
+      }
+    });
+
+    return () => {
+      try {
+        channel.stopListening(".ScheduleUpdate");
+        channel.stopListening(".PlaylistReload");
+        echo.leave(channelName);
+      } catch {}
+      off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenId, qc]);
+
+  // UI states
+  if (!screenId) {
+    return <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">Device not linked.</main>;
+  }
+  if (isLoading) {
+    return <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">Loading…</main>;
+  }
+  if (!decision.playlist?.slides?.length) {
+    return <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">No media available.</main>;
+  }
+
   return (
-    <main className="relative min-h-screen overflow-hidden bg-white">
-      {/* Soft red glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(65%_35%_at_50%_0%,rgba(239,68,68,0.10),transparent_60%)]" />
-
-      {/* Floating confetti */}
-      <div className="pointer-events-none absolute inset-0">
-        {Array.from({ length: 18 }).map((_, i) => (
-          <span
-            key={i}
-            className="absolute h-2 w-2 rounded-sm bg-red-500/70"
-            style={{
-              left: `${(i * 53) % 100}%`,
-              top: `${(i * 37) % 100}%`,
-              transform: `rotate(${i * 20}deg)`,
-              animation: `floaty ${6 + (i % 5)}s ease-in-out ${(i % 4) * 0.4}s infinite`,
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Center card */}
-      <section className="relative z-10 mx-auto flex min-h-screen max-w-3xl items-center justify-center p-6">
-        <div className="w-full rounded-2xl border border-red-500/20 bg-white/80 p-8 shadow-[0_10px_40px_-10px_rgba(239,68,68,0.35)] backdrop-blur">
-          {/* Badge */}
-          <div className="mb-6 flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow">
-              <svg
-                viewBox="0 0 24 24"
-                className="h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-              >
-                <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <span className="rounded-full border border-red-500/30 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-red-500">
-              Success
-            </span>
-          </div>
-
-          {/* Title */}
-          <h1 className="text-4xl font-black leading-tight tracking-tight text-red-500 drop-shadow-sm sm:text-5xl">
-            Welcome to <span className="underline decoration-red-500/30">Iguana</span>
-          </h1>
-
-          {/* Subtitle */}
-          <p className="mt-3 text-base text-neutral-700 sm:text-lg">
-            Your screen has been added <span className="font-semibold text-red-500">successfully</span>!
-          </p>
-        </div>
-      </section>
-
-      {/* Decorative corner ribbons */}
-      <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rotate-12 bg-red-500/10 blur-2xl" />
-      <div className="pointer-events-none absolute -bottom-10 -right-10 h-40 w-40 -rotate-12 bg-red-500/10 blur-2xl" />
-
-      {/* Keyframes */}
-      <style>{`
-        @keyframes floaty {
-          0% { transform: translateY(0) rotate(0deg); opacity: 0.9; }
-          50% { transform: translateY(-10px) rotate(6deg); opacity: 1; }
-          100% { transform: translateY(0) rotate(0deg); opacity: 0.9; }
-        }
-      `}</style>
+    <main className="w-screen h-[100dvh] bg-black text-white">
+      <PlaylistPlayer
+        playlist={decision.playlist}
+        screenId={screenId}
+        scheduleId={activeScheduleId}
+        onRequestRefetch={() => void quietRefresh(null)}
+      />
     </main>
   );
 };

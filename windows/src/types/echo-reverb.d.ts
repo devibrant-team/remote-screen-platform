@@ -1,8 +1,9 @@
-import 'laravel-echo';
+// src/types/echo-reverb.d.ts
+import "laravel-echo";
 
-declare module 'laravel-echo' {
-  // Tell Echo that 'reverb' is a valid broadcaster key
+// نضيف 'reverb' كمفتاح مدعوم ضمن Broadcasters لـ laravel-echo
+declare module "laravel-echo" {
   interface Broadcasters {
-    reverb: unknown;
-  }
+    reverb: {}; // ممكن تستخدم {} أو unknown
+  }
 }

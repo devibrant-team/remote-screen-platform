@@ -19,7 +19,6 @@ export const echo = new Echo({
   wssPort: Number(import.meta.env.VITE_REVERB_PORT ?? 443),
   forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? "https") === "https",
   enabledTransports: ["ws", "wss"],
-  
 });
 
 // ---- Connection status handling ----
@@ -53,13 +52,22 @@ pusher.connection.bind(
 );
 
 // Specific events you might want to log
-pusher?.connection.bind('connected', () => console.log('[Reverb] ✅ Connected'));
-pusher?.connection.bind('connecting', () => console.log('[Reverb] ⏳ Connecting...'));
-pusher?.connection.bind('disconnected', () => console.log('[Reverb] ❌ Disconnected'));
-pusher?.connection.bind('unavailable', () => console.log('[Reverb] ⚠ Unavailable'));
-pusher?.connection.bind('failed', () => console.log('[Reverb] 💥 Failed'));
-pusher?.connection.bind('error', (err: unknown) => console.error('[Reverb] 🚨 Error', err));
-
+pusher?.connection.bind("connected", () =>
+  console.log("[Reverb] ✅ Connected")
+);
+pusher?.connection.bind("connecting", () =>
+  console.log("[Reverb] ⏳ Connecting...")
+);
+pusher?.connection.bind("disconnected", () =>
+  console.log("[Reverb] ❌ Disconnected")
+);
+pusher?.connection.bind("unavailable", () =>
+  console.log("[Reverb] ⚠ Unavailable")
+);
+pusher?.connection.bind("failed", () => console.log("[Reverb] 💥 Failed"));
+pusher?.connection.bind("error", (err: unknown) =>
+  console.error("[Reverb] 🚨 Error", err)
+);
 
 // Optional error hook
 pusher.connection.bind("error", (err: unknown) => {
@@ -114,3 +122,69 @@ export const ReverbConnection = {
     }
   },
 };
+export function persistAuthTokenFromEvent(payload: any) {
+  const token = payload?.token ?? payload?.auth_token;
+  if (token) {
+    localStorage.setItem("authToken", String(token));
+    console.log("[Reverb] ✅ Saved token to localStorage");
+  }
+}
+
+type Unsub = () => void;
+
+export function subscribeScreenChannel(
+  screenId: string | number | null | undefined,
+  onScheduleUpdate: (e: any) => void
+): Unsub {
+  // تحقّق آمن
+  if (screenId === null || screenId === undefined || screenId === "") {
+    console.warn("[Reverb] ❗ subscribeScreenChannel called without screenId");
+    // نرجّع Unsub فارغ حتى لا يكسر التطبيق
+    return () => {};
+  }
+
+  const idStr = String(screenId);
+  const channelName = `screens.${idStr}`;
+
+  console.log(`[Reverb] 🎧 Subscribing to channel: ${channelName}`);
+  console.log(`[Reverb] 📺 Screen ID: ${idStr}`);
+
+  const handler = (e: any) => {
+    console.log(`[Reverb] 📩 ScheduleUpdate received on ${channelName}`, e);
+    console.log(`[Reverb] 🔢 Event belongs to screenId: ${idStr}`);
+    persistAuthTokenFromEvent(e);
+    onScheduleUpdate(e);
+  };
+
+  const channel = echo.channel(channelName);
+  channel.listen(".ScheduleUpdate", handler);
+
+  // إعادة الاشتراك عند عودة الاتصال
+  const off = ReverbConnection.onStatus((s) => {
+    if (s === "connected") {
+      console.log(`[Reverb] 🔄 Reconnected — resubscribing to ${channelName}`);
+      console.log(`[Reverb] 📺 Screen ID (reconnect): ${idStr}`);
+      try {
+        echo.leave(channelName);
+        const c = echo.channel(channelName);
+        c.listen(".ScheduleUpdate", handler);
+        console.log(`[Reverb] ✅ Resubscribed to ${channelName}`);
+      } catch (err) {
+        console.warn(`[Reverb] ⚠️ Failed to resubscribe to ${channelName}`, err);
+      }
+    }
+  });
+
+  // تنظيف
+  return () => {
+    console.log(`[Reverb] ❌ Unsubscribing from ${channelName}`);
+    console.log(`[Reverb] 📺 Screen ID (cleanup): ${idStr}`);
+    try {
+      channel.stopListening(".ScheduleUpdate", handler);
+      echo.leave(channelName);
+    } catch (err) {
+      console.warn(`[Reverb] ⚠️ Error while unsubscribing from ${channelName}`, err);
+    }
+    off();
+  };
+}

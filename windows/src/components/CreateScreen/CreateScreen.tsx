@@ -11,8 +11,8 @@ type DeviceState = {
 };
 
 const LS_SCREEN_ID = "screenId";
-const LS_CODE = "code";
 const LS_LINKED = "linked";
+const LS_TOKEN = "authToken";
 
 export default function CreateScreen() {
   const navigate = useNavigate();
@@ -33,13 +33,11 @@ export default function CreateScreen() {
   // ===== 1) Hydrate state =====
   useEffect(() => {
     const lsScreenId = localStorage.getItem(LS_SCREEN_ID) || undefined;
-    const lsCode = localStorage.getItem(LS_CODE) || undefined;
     const lsLinked = localStorage.getItem(LS_LINKED) === "1";
 
-    if (lsScreenId || lsCode || lsLinked) {
+    if (lsScreenId || lsLinked) {
       setDeviceState({
         screenId: lsScreenId,
-        code: lsCode,
         linked: lsLinked,
       });
     }
@@ -57,7 +55,6 @@ export default function CreateScreen() {
       .then((s: DeviceState) => {
         setDeviceState({
           screenId: s?.screenId ?? lsScreenId,
-          code: s?.code ?? lsCode,
           linked: s?.linked ?? lsLinked,
         });
 
@@ -98,7 +95,6 @@ export default function CreateScreen() {
     api?.saveScreenId?.(String(data.screenId)).catch(() => {});
 
     localStorage.setItem(LS_SCREEN_ID, String(data.screenId));
-    if (data.code != null) localStorage.setItem(LS_CODE, String(data.code));
 
     setDeviceState({
       screenId: String(data.screenId),
@@ -135,11 +131,26 @@ export default function CreateScreen() {
     const channel = echo.channel(channelName);
     channelRef.current = channel;
 
-    const handler = (e: { screen_id: number | string }) => {
+    const handler = (e: {
+      screen_id: number | string;
+      next_url?: string;
+      screenToken?: string;
+    }) => {
       const expected = expectedIdRef.current?.toString();
       const eventId = e?.screen_id?.toString();
 
       if (expected && eventId === expected) {
+        // ✅ Save the screenToken sent from backend
+        if (e?.screenToken) {
+          localStorage.setItem(LS_TOKEN, String(e.screenToken));
+          console.log(
+            "[pairing] ✅ Saved screenToken to localStorage:",
+            e.screenToken
+          );
+        } else {
+          console.log("[pairing] ℹ No screenToken found in event payload");
+        }
+
         const api = (window as any)?.signage;
         api?.setLinked?.(true).catch(() => {});
         localStorage.setItem(LS_LINKED, "1");
@@ -176,8 +187,8 @@ export default function CreateScreen() {
     const api = (window as any)?.signage;
     api?.resetDevice?.().catch(() => {});
     localStorage.removeItem(LS_SCREEN_ID);
-    localStorage.removeItem(LS_CODE);
     localStorage.removeItem(LS_LINKED);
+    localStorage.removeItem(LS_TOKEN); // ✅ clear saved token
     setDeviceState({});
     lockedRef.current = false;
     firedRef.current = false;

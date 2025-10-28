@@ -1,0 +1,17 @@
+// src/ReactQuery/Schedule/prefetchNextPlaylist.ts
+import { QueryClient } from "@tanstack/react-query";
+import { fetchChildPlaylist } from "./useChildPlaylist";
+
+/** Prefetch next schedule’s playlist into cache. */
+export async function prefetchNextPlaylist(
+  queryClient: QueryClient,
+  nextScheduleId: number | string | undefined,
+  screenId?: number | string
+) {
+  if (!nextScheduleId) return;
+  await queryClient.prefetchQuery({
+    queryKey: ["childPlaylist", nextScheduleId, screenId],
+    queryFn: () => fetchChildPlaylist(nextScheduleId, screenId),
+    staleTime: 60_000, // treat as fresh for 1 min
+  });
+}
