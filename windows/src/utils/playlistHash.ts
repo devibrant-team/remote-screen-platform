@@ -1,3 +1,4 @@
+// windows/src/utils/playlistHash.ts
 import type { ChildPlaylistResponse } from "../types/schedule";
 
 export function hashPlaylist(pl?: ChildPlaylistResponse["playlist"]): string {

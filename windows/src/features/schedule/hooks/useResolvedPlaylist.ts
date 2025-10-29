@@ -2,8 +2,8 @@
 import { useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTimedSchedule } from "./useTimedSchedule";
-import { useChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
-import { useDefaultPlaylist } from "../../../ReactQuery/schedule/useDefaultPlaylist";
+import { useChildPlaylist, fetchChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
+import { useDefaultPlaylist, fetchDefaultPlaylist } from "../../../ReactQuery/schedule/useDefaultPlaylist";
 import {
   saveLastGoodChild,
   saveLastGoodDefault,
@@ -12,6 +12,8 @@ import {
   getNowPlaying,
 } from "../../../utils/playlistCache";
 import { prefetchWindow } from "../../../utils/mediaPrefetcher";
+import { useOnline } from "./useOnline";
+import { qk } from "../../../ReactQuery/queryKeys";
 
 type Decision =
   | { source: "child"; playlist: any; reason: string }
@@ -23,6 +25,7 @@ const hasSlides = (pl?: any) => Array.isArray(pl?.slides) && pl.slides.length > 
 
 export function useResolvedPlaylist(screenId?: string) {
   const qc = useQueryClient();
+  const online = useOnline();
   const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
 
   // Live queries
@@ -45,19 +48,38 @@ export function useResolvedPlaylist(screenId?: string) {
     if (hasSlides(defaultQ.data?.playlist)) saveLastGoodDefault(defaultQ.data!.playlist);
   }, [defaultQ.data?.playlist]);
 
+  // In gaps (no active schedule) proactively warm default
+  useEffect(() => {
+    if (!screenId) return;
+    if (!activeScheduleId) {
+      qc.prefetchQuery({
+        queryKey: qk.def(screenId),
+        queryFn: () => fetchDefaultPlaylist(screenId),
+        staleTime: 5 * 60_000,
+      }).catch(() => {});
+    }
+  }, [screenId, activeScheduleId, qc]);
+
+  // 🔔 When the active schedule changes, proactively prefetch its child playlist fresh
+  useEffect(() => {
+    if (!activeScheduleId) return;
+    qc.prefetchQuery({
+      queryKey: qk.child(activeScheduleId, screenId),
+      queryFn: () => fetchChildPlaylist(activeScheduleId, screenId),
+      staleTime: 0, // ensure immediate freshness at boundary
+    }).catch(() => {});
+  }, [activeScheduleId, screenId, qc]);
+
   // Decide what to show
   const decision: Decision = useMemo(() => {
-    const online = typeof navigator !== "undefined" ? navigator.onLine : true;
-
     // 1) Child (fresh) wins
     if (hasSlides(child.data?.playlist)) {
       return { source: "child", playlist: child.data!.playlist, reason: "active child ok" };
     }
 
-    // 2) If we’re offline and we *do not* have a playlist already running,
-    //    prefer a cached default if available, then cached child
+    // 2) Offline: if nothing running yet, prefer cached default/child
     if (!online) {
-      const running = getNowPlaying(); // "currently on screen" from previous render
+      const running = getNowPlaying();
       if (!hasSlides(running?.playlist)) {
         const cachedDef = loadLastGoodDefault();
         if (hasSlides(cachedDef?.playlist)) {
@@ -90,22 +112,21 @@ export function useResolvedPlaylist(screenId?: string) {
 
     // 5) Nothing
     return { source: "empty", playlist: null, reason: "no slides anywhere" };
-  }, [child.data?.playlist, defaultQ.data?.playlist]);
+  }, [child.data?.playlist, defaultQ.data?.playlist, online]);
 
   // Light prefetch for upcoming slides in whichever playlist we decided
   useEffect(() => {
     if (!hasSlides(decision.playlist)) return;
-    // Prefetch the next 2 slides ahead of index 0 (tweak to your player’s current index)
     const cancel = prefetchWindow(decision.playlist.slides, 0, 2);
     return () => cancel();
   }, [decision.playlist]);
 
   // Quiet refresh helper (parent + child + default)
   const quietRefreshAll = async (overrideScheduleId?: number | string | null) => {
-    const sid = overrideScheduleId ?? activeScheduleId ?? null;
-    const parentKey = ["parentSchedules", String(screenId ?? "")];
-    const childKey = sid != null ? ["childPlaylist", String(sid), String(screenId ?? "")] : null;
-    const defaultKey = ["defaultPlaylist", String(screenId ?? "")];
+    const sid = overrideScheduleId ?? activeScheduleId ?? undefined;
+    const parentKey = qk.parent(screenId);
+    const childKey = sid != null ? qk.child(sid, screenId) : null;
+    const defaultKey = qk.def(screenId);
 
     await qc.invalidateQueries({ queryKey: parentKey, refetchType: "active" });
     if (childKey) await qc.invalidateQueries({ queryKey: childKey, refetchType: "active" });

@@ -1,8 +1,10 @@
+// windows/src/ReactQuery/schedule/useDefaultPlaylist.ts
 import axios from "axios";
 import { useQuery } from "@tanstack/react-query";
 import { DefaultPlayListApi } from "../../Api/Api";
 import type { ChildPlaylistResponse } from "../../types/schedule";
 import { LS_TOKEN } from "./useParentSchedules";
+import { qk } from "../../ReactQuery/queryKeys";
 
 /** Normalizes any known server shape to ChildPlaylistResponse */
 function normalizeDefaultResp(raw: any): ChildPlaylistResponse {
@@ -13,10 +15,12 @@ function normalizeDefaultResp(raw: any): ChildPlaylistResponse {
   if (raw?.data?.playlist?.slides) return raw.data as ChildPlaylistResponse;
 
   // Case C: direct slides: { slides: [...] }
-  if (Array.isArray(raw?.slides)) return { playlist: raw } as ChildPlaylistResponse;
+  if (Array.isArray(raw?.slides))
+    return { playlist: raw } as ChildPlaylistResponse;
 
   // Case D: nested: { data: { slides: [...] } }
-  if (Array.isArray(raw?.data?.slides)) return { playlist: raw.data } as ChildPlaylistResponse;
+  if (Array.isArray(raw?.data?.slides))
+    return { playlist: raw.data } as ChildPlaylistResponse;
 
   // Fallback: return what we got; downstream will treat as "no slides"
   return raw as ChildPlaylistResponse;
@@ -27,10 +31,9 @@ export async function fetchDefaultPlaylist(
   screenId: number | string
 ): Promise<ChildPlaylistResponse> {
   const token = localStorage.getItem(LS_TOKEN) ?? "";
-  const { data } = await axios.get(
-    `${DefaultPlayListApi}/${screenId}`,
-    { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
-  );
+  const { data } = await axios.get(`${DefaultPlayListApi}/${screenId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   return normalizeDefaultResp(data);
 }
 
@@ -43,7 +46,7 @@ export function useDefaultPlaylist(
   enabled = false
 ) {
   return useQuery({
-    queryKey: ["defaultPlaylist", screenId],
+    queryKey: qk.def(screenId),
     queryFn: () => fetchDefaultPlaylist(screenId as number | string),
     enabled: !!screenId && enabled,
     staleTime: 5 * 60_000,

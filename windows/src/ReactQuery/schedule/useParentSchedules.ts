@@ -1,3 +1,4 @@
+// windows/src/ReactQuery/schedule/useParentSchedules.ts
 import axios from "axios";
 import { useQuery } from "@tanstack/react-query";
 import { GetParentScheduleApi } from "../../Api/Api";
@@ -6,6 +7,7 @@ import type {
   ParentScheduleItem,
 } from "../../types/schedule";
 import { pickActiveAndNext } from "../../utils/timeWindow";
+import { qk } from "../../ReactQuery/queryKeys";
 
 export const LS_TOKEN = "authToken";
 
@@ -22,7 +24,7 @@ export async function fetchParentSchedules(
 
 export function useParentSchedules(screenId?: string) {
   return useQuery({
-    queryKey: ["parentSchedules", screenId],
+    queryKey: qk.parent(screenId),
     queryFn: () => fetchParentSchedules(screenId as string),
     enabled: !!screenId,
     staleTime: 60_000,

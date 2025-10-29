@@ -19,7 +19,6 @@ export function prefetchImage(url?: string): Cancel {
   img.onerror = () => {};
   return () => {
     cancelled = true;
-    // let GC handle the Image
   };
 }
 
@@ -28,7 +27,6 @@ export function prefetchVideo(url?: string): Cancel {
   if (!url) return () => {};
   if (videoCache.has(url)) return () => {};
 
-  // Avoid duplicate prefetches
   if (inflightFetches.has(url)) {
     const ac = inflightFetches.get(url)!;
     return () => ac.abort();
@@ -37,16 +35,16 @@ export function prefetchVideo(url?: string): Cancel {
   const ac = new AbortController();
   inflightFetches.set(url, ac);
 
-  // HEAD is often enough; some servers disallow HEAD → fallback to GET with Range
   fetch(url, { method: "HEAD", signal: ac.signal })
     .then(() => videoCache.add(url))
     .catch(() => {
-      // best-effort small range to nudge caching
       return fetch(url, {
         method: "GET",
         headers: { Range: "bytes=0-4095" },
         signal: ac.signal,
-      }).then(() => videoCache.add(url)).catch(() => {});
+      })
+        .then(() => videoCache.add(url))
+        .catch(() => {});
     })
     .finally(() => inflightFetches.delete(url));
 
@@ -73,14 +71,20 @@ export function prefetchWindow(
   count: number
 ): Cancel {
   const cancels: Cancel[] = [];
-  const len = slides.length;
-  for (let i = 1; i <= count; i++) {
+  const len = slides?.length ?? 0;
+  if (len <= 1) return () => {};
+
+  const toPrefetch = Math.min(count, Math.max(0, len - 1));
+  for (let i = 1; i <= toPrefetch; i++) {
     const idx = (startIndex + i) % len;
-    cancels.push(prefetchSlideMedia(slides[idx]));
+    const slide = slides[idx];
+    if (slide) {
+      cancels.push(prefetchSlideMedia(slide));
+    }
   }
   return () => cancels.forEach((c) => c());
 }
-// src/utils/mediaPrefetcher.ts  (add at bottom)
+
 export function isImagePrefetched(url?: string) {
   return !!url && imageCache.has(url);
 }
