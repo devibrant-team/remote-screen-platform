@@ -18,3 +18,8 @@ const signage = {
 };
 
 contextBridge.exposeInMainWorld("signage", signage);
+contextBridge.exposeInMainWorld('mediaCache', {
+  mapToLocal: async (urls: string[]): Promise<Record<string,string>> => {
+    return ipcRenderer.invoke('media-cache:map', urls);
+  },
+});

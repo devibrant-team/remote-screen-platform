@@ -25,7 +25,7 @@ const hasSlides = (pl?: any) => Array.isArray(pl?.slides) && pl.slides.length > 
 
 export function useResolvedPlaylist(screenId?: string) {
   const qc = useQueryClient();
-  const online = useOnline();
+  const online = useOnline(); 
   const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
 
   // Live queries

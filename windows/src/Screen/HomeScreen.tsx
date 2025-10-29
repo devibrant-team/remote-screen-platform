@@ -4,7 +4,8 @@ import "swiper/css/effect-fade";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import PlaylistPlayer from "../features/schedule/components/PlaylistPlayer";
+// ⬇️ Use SmartPlayer (auto-picks Normal vs Interactive)
+import SmartPlayer from "../features/schedule/components/SmartPlayer";
 import { useScreenId } from "../features/schedule/hooks/useScreenId";
 import { echo, ReverbConnection } from "../echo";
 import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlaylist";
@@ -14,6 +15,11 @@ import { prefetchSlideMedia, prefetchWindow } from "../utils/mediaPrefetcher";
 
 type ScheduleUpdatePayload = { scheduleId?: number | string } & Record<string, unknown>;
 const hasSlides = (pl?: any) => Array.isArray(pl?.slides) && pl.slides.length > 0;
+const isInteractive = (pl?: any) =>
+  Array.isArray(pl?.slides) &&
+  pl.slides.length > 0 &&
+  !!pl.slides[0]?.media &&        // interactive slides have `media`
+  !pl.slides[0]?.slots;           // and do not have `slots`
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
@@ -23,6 +29,7 @@ function classNames(...xs: Array<string | false | null | undefined>) {
 const describePlaylist = (pl: any) => ({
   slides: Array.isArray(pl?.slides) ? pl.slides.length : 0,
   hash: hashPlaylist(pl),
+  kind: isInteractive(pl) ? "interactive" : "normal",
 });
 const log = (tag: string, info: Record<string, any>) => {
   const ts = new Date().toISOString();
@@ -34,17 +41,41 @@ const log = (tag: string, info: Record<string, any>) => {
   console.groupEnd();
 };
 
-// ---- warming helper: best-effort preload first slide + a small window ----
+// ---- warming helper: handles both normal (slots) & interactive (media) ----
 async function warmPlaylist(pl: any, windowCount = 2, timeoutMs = 1200): Promise<void> {
   if (!hasSlides(pl)) return;
-  const slides = pl.slides;
+
   const cancels: Array<() => void> = [];
   try {
-    // Prefetch first slide fully (images/videos)
-    cancels.push(prefetchSlideMedia(slides[0]));
-    // Prefetch a small window ahead
-    cancels.push(prefetchWindow(slides, 0, windowCount));
-    // Small cap so we don't block forever; media cache warms in background anyway
+    if (isInteractive(pl)) {
+      // Interactive: each slide has a single background image URL in `media`
+      const slides: Array<{ media?: string }> = pl.slides ?? [];
+      // Prefetch current (index 0) + window ahead
+      const loaders: HTMLImageElement[] = [];
+      const preload = (url?: string) => {
+        if (!url) return;
+        const img = new Image();
+        img.decoding = "async";
+        img.loading = "eager";
+        img.src = url;
+        loaders.push(img);
+      };
+      if (slides[0]?.media) preload(slides[0].media);
+      const len = slides.length;
+      const ahead = Math.min(windowCount, Math.max(0, len - 1));
+      for (let i = 1; i <= ahead; i++) {
+        const s = slides[i % len];
+        if (s?.media) preload(s.media);
+      }
+      // nothing to cancel for <img>; keep interface parity
+      cancels.push(() => {});
+    } else {
+      // Normal: use your existing prefetchers for slots
+      const slides = pl.slides;
+      cancels.push(prefetchSlideMedia(slides[0]));
+      cancels.push(prefetchWindow(slides, 0, windowCount));
+    }
+
     await new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
   } finally {
     cancels.forEach((c) => c());
@@ -77,14 +108,16 @@ const HomeScreen: React.FC = () => {
       (hasSlides(decision.playlist) && decision.playlist) ||
       cachedDefault ||
       null;
-    const reason = hasSlides(decision.playlist) ? `decision:${decision.source}` : cachedDefault ? "cached-default" : "none";
+    const reason = hasSlides(decision.playlist)
+      ? `decision:${decision.source}`
+      : cachedDefault
+      ? "cached-default"
+      : "none";
     log("TARGET", { reason, ...describePlaylist(target) });
     return target;
   }, [decision.playlist, decision.source, cachedDefault]);
 
   // -------- DOUBLE BUFFERING STATE --------
-  // current = the playlist actually on screen
-  // next = the playlist we are warming to swap to
   const [current, setCurrent] = useState<any | null>(() => targetPlaylist);
   const [next, setNext] = useState<any | null>(null);
   const [nextReady, setNextReady] = useState(false);
@@ -107,7 +140,6 @@ const HomeScreen: React.FC = () => {
     log("STAGE_NEXT", { target: describePlaylist(targetPlaylist) });
 
     (async () => {
-      // warm the staged playlist
       await warmPlaylist(targetPlaylist, 2, 800);
       if (swapAbortRef.current.aborted) return;
       setNextReady(true);
@@ -115,7 +147,6 @@ const HomeScreen: React.FC = () => {
 
       // crossfade swap
       setIsSwapping(true);
-      // let CSS transition run for ~250–300ms
       setTimeout(() => {
         if (swapAbortRef.current.aborted) return;
         setCurrent(targetPlaylist);
@@ -127,7 +158,6 @@ const HomeScreen: React.FC = () => {
       }, 250);
     })();
 
-    // cleanup on new target before swap completes
     return () => {
       swapAbortRef.current.aborted = true;
     };
@@ -223,7 +253,7 @@ const HomeScreen: React.FC = () => {
       {/* Current player (always visible during swap) */}
       {hasSlides(current) && (
         <div className="absolute inset-0">
-          <PlaylistPlayer
+          <SmartPlayer
             key={`current-${hashPlaylist(current)}`}
             playlist={current}
             screenId={screenId}
@@ -241,7 +271,7 @@ const HomeScreen: React.FC = () => {
             nextReady ? "opacity-100" : "opacity-0 pointer-events-none"
           )}
         >
-          <PlaylistPlayer
+          <SmartPlayer
             key={`next-${hashPlaylist(next)}`}
             playlist={next}
             screenId={screenId}
@@ -251,7 +281,7 @@ const HomeScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Optional subtle overlay during swap (avoid pure black gaps) */}
+      {/* Optional subtle overlay during swap (kept transparent here) */}
       <div
         className={classNames(
           "pointer-events-none absolute inset-0 bg-black/0 transition-colors duration-300",
