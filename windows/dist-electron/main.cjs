@@ -39,6 +39,83 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // electron/main.ts
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_crypto_1 = require("node:crypto");
+const node_stream_1 = require("node:stream");
+const node_util_1 = require("node:util");
+const streamPipeline = (0, node_util_1.promisify)(node_stream_1.pipeline);
+const MEDIA_DIR = node_path_1.default.join(electron_1.app.getPath('userData'), 'media-cache');
+const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, 'index.json');
+const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
+function ensureDir() { if (!node_fs_1.default.existsSync(MEDIA_DIR))
+    node_fs_1.default.mkdirSync(MEDIA_DIR, { recursive: true }); }
+function loadIndex() { try {
+    return JSON.parse(node_fs_1.default.readFileSync(INDEX_FILE, 'utf8'));
+}
+catch {
+    return {};
+} }
+function saveIndex(ix) { node_fs_1.default.writeFileSync(INDEX_FILE, JSON.stringify(ix), 'utf8'); }
+function keyFor(url) { return (0, node_crypto_1.createHash)('sha1').update(url).digest('hex'); }
+function sizeOf(file) { try {
+    return node_fs_1.default.statSync(file).size;
+}
+catch {
+    return 0;
+} }
+function totalSize(ix) { return Object.values(ix).reduce((a, r) => a + (r.s || 0), 0); }
+async function evictIfNeeded(ix) {
+    let sz = totalSize(ix);
+    if (sz <= MAX_BYTES)
+        return;
+    const entries = Object.entries(ix).sort((a, b) => a[1].t - b[1].t); // LRU
+    for (const [k, rec] of entries) {
+        try {
+            node_fs_1.default.unlinkSync(rec.p);
+        }
+        catch { }
+        delete ix[k];
+        sz = totalSize(ix);
+        if (sz <= MAX_BYTES)
+            break;
+    }
+    saveIndex(ix);
+}
+async function downloadToFile(url, dst) {
+    const res = await fetch(url);
+    if (!res.ok)
+        throw new Error(`HTTP ${res.status}`);
+    const file = node_fs_1.default.createWriteStream(dst);
+    await streamPipeline(res.body, file);
+}
+electron_1.ipcMain.handle('media-cache:map', async (_evt, urls) => {
+    ensureDir();
+    const ix = loadIndex();
+    const results = {};
+    for (const url of urls) {
+        const k = keyFor(url);
+        const rec = ix[k];
+        if (rec && node_fs_1.default.existsSync(rec.p)) {
+            rec.t = Date.now();
+            results[url] = `file://${rec.p.replace(/\\/g, '/')}`;
+            continue;
+        }
+        const ext = node_path_1.default.extname(new URL(url).pathname) || '';
+        const dst = node_path_1.default.join(MEDIA_DIR, `${k}${ext}`);
+        try {
+            await downloadToFile(url, dst);
+            const s = sizeOf(dst);
+            ix[k] = { p: dst, s, t: Date.now() };
+            results[url] = `file://${dst.replace(/\\/g, '/')}`;
+        }
+        catch {
+            results[url] = url; // fallback
+        }
+    }
+    await evictIfNeeded(ix);
+    saveIndex(ix);
+    return results;
+});
 async function getStore() {
     const mod = await Promise.resolve().then(() => __importStar(require("electron-store")));
     const Store = mod.default;

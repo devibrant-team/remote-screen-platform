@@ -1,4 +1,3 @@
-// src/features/schedule/hooks/useResolvedPlaylist.ts
 import { useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTimedSchedule } from "./useTimedSchedule";
@@ -14,6 +13,7 @@ import {
 import { prefetchWindow } from "../../../utils/mediaPrefetcher";
 import { useOnline } from "./useOnline";
 import { qk } from "../../../ReactQuery/queryKeys";
+import { useServerClockStrict } from "../../../utils/useServerClockStrict"; // ⏱️ مرجع الوقت الوحيد
 
 type Decision =
   | { source: "child"; playlist: any; reason: string }
@@ -23,44 +23,23 @@ type Decision =
 
 const hasSlides = (pl?: any) => Array.isArray(pl?.slides) && pl.slides.length > 0;
 
-/** يحوّل "HH:mm[:ss]" إلى توقيت اليوم بالملّي ثانية */
-function todayTimeToMs(hms?: string | null): number | undefined {
-  if (!hms) return undefined;
-  const [hh, mm = "0", ss = "0"] = String(hms).split(":");
-  const now = new Date();
-  const dt = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    Number(hh) || 0,
-    Number(mm) || 0,
-    Number(ss) || 0,
-    0
-  );
-  return dt.getTime();
+/* ---------- Safe access helpers ---------- */
+function pickStr(obj: unknown, key: string): string | undefined {
+  const v = (obj as any)?.[key];
+  return typeof v === "string" ? v : undefined;
 }
-
-/** يحسب وقت نهاية النافذة النشطة من كائن active */
-function computeActiveEndAtMs(active: any | undefined): number | undefined {
-  if (typeof active?.end_at_ms === "number") return active.end_at_ms;
-  if (active?.end_time) return todayTimeToMs(active.end_time);
+function pickFirstDefined<T = any>(obj: unknown, keys: string[]): T | undefined {
+  for (const k of keys) {
+    const v = (obj as any)?.[k];
+    if (v !== undefined && v !== null) return v as T;
+  }
   return undefined;
-}
-
-/** يستخرج معلومات "التالي" من useTimedSchedule.next (إن وجدت) */
-function getUpcomingFromNext(next: any | undefined) {
-  const nextStartAt: number | undefined =
-    typeof next?.start_at_ms === "number"
-      ? next.start_at_ms
-      : next?.startAtMs ?? todayTimeToMs(next?.start_time);
-
-  const upcomingPlaylist = next?.playlist ?? next?.child ?? null;
-  return { nextStartAt, upcomingPlaylist };
 }
 
 export function useResolvedPlaylist(screenId?: string) {
   const qc = useQueryClient();
   const online = useOnline();
+  const clock = useServerClockStrict(); // ← المرجع الزمني الوحيد
   const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
 
   // Live queries
@@ -116,10 +95,9 @@ export function useResolvedPlaylist(screenId?: string) {
       if (hasSlides(cachedDef?.playlist)) {
         return { source: "cache", playlist: cachedDef!.playlist, reason: "online + no schedule → cached default" };
       }
-      // نكمل بقية الفروع لو لم يتوفر أي شيء
     }
 
-    // 1) Child (fresh) wins
+    // 1) Child (fresh)
     if (hasSlides(child.data?.playlist)) {
       return { source: "child", playlist: child.data!.playlist, reason: "active child ok" };
     }
@@ -146,7 +124,7 @@ export function useResolvedPlaylist(screenId?: string) {
       return { source: "default", playlist: defaultQ.data!.playlist, reason: "default ok" };
     }
 
-    // 4) Cached last-good (prefer child then default)
+    // 4) Cached last-good
     const cachedChild = loadLastGoodChild();
     if (hasSlides(cachedChild?.playlist)) {
       return { source: "cache", playlist: cachedChild!.playlist, reason: "cached last child" };
@@ -183,9 +161,23 @@ export function useResolvedPlaylist(screenId?: string) {
     await qc.refetchQueries({ queryKey: defaultKey, type: "active" });
   };
 
-  // قيم صريحة للـUI
-  const activeEndAtMs = computeActiveEndAtMs(active);
-  const { nextStartAt, upcomingPlaylist } = getUpcomingFromNext(next);
+  // ====== حسابات مبنية فقط على ساعة السيرفر الصارمة ======
+  // نحسب "تأخير" حتى نهاية نافذة الـChild (ميلي ثانية)
+  const activeEndDelayMs = useMemo(() => {
+    const endTime = pickStr(active, "end_time"); // HH:mm:ss
+    return endTime ? clock.msUntil(endTime) : undefined; // 0..N
+  }, [active, clock]);
+
+  // تأخير حتى بداية الـnext (إن وجد)
+  const nextStartDelayMs = useMemo(() => {
+    const startTime = pickStr(next, "start_time"); // HH:mm:ss
+    return startTime ? clock.msUntil(startTime) : undefined;
+  }, [next, clock]);
+
+  // Playlist القادم إن وُجد (next.playlist أو next.child)
+  const upcomingPlaylist = useMemo(() => {
+    return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
+  }, [next]);
 
   return {
     parent, active, next, activeScheduleId,
@@ -194,9 +186,9 @@ export function useResolvedPlaylist(screenId?: string) {
     isError: parent.isError && child.isError && defaultQ.isError,
     quietRefreshAll,
 
-    // إضافات
-    activeEndAtMs,
-    nextStartAt,
+    // إضافات صريحة للـUI (تأخيرات فقط، بلا Date.now)
+    activeEndDelayMs,
+    nextStartDelayMs,
     upcomingPlaylist,
   };
 }

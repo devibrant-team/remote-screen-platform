@@ -1,4 +1,3 @@
-// src/pages/HomeScreen.tsx
 import "swiper/css";
 import "swiper/css/effect-fade";
 
@@ -24,6 +23,7 @@ import {
 } from "../utils/mediaPrefetcher";
 import type { ChildPlaylistResponse } from "../types/schedule";
 import { currentNetMode, type NetMode } from "../utils/netHealth";
+import NoSchedule from "../components/aaa/NoSchedule";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 type ScheduleUpdatePayload = { scheduleId?: number | string } & Record<string, unknown>;
@@ -184,9 +184,9 @@ const HomeScreen: React.FC = () => {
     decision,
     isLoading,
     quietRefreshAll,
-    // من الهُوك
-    activeEndAtMs,
-    nextStartAt,
+    // من الهُوك (تأخيرات فقط)
+    activeEndDelayMs,
+    nextStartDelayMs,
     upcomingPlaylist,
   } = useResolvedPlaylist(screenId);
 
@@ -231,9 +231,9 @@ const HomeScreen: React.FC = () => {
   useEffect(() => {
     latest.current = { screenId, scheduleId: activeScheduleId };
     const g = dGroup("STATE");
-    g.log({ screenId, activeScheduleId, isOnline, netMode, activeEndAtMs, nextStartAt });
+    g.log({ screenId, activeScheduleId, isOnline, netMode, activeEndDelayMs, nextStartDelayMs });
     g.end();
-  }, [screenId, activeScheduleId, isOnline, netMode, activeEndAtMs, nextStartAt]);
+  }, [screenId, activeScheduleId, isOnline, netMode, activeEndDelayMs, nextStartDelayMs]);
 
   const cachedDefault: PlaylistT | null = useMemo(() => {
     const cached = loadLastGoodDefault();
@@ -266,6 +266,8 @@ const HomeScreen: React.FC = () => {
   const [next, setNext] = useState<PlaylistT | null>(null);
   const [nextReady, setNextReady] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
+  const noServerPlaylist = !hasSlides(decision.playlist as any);
+const noDefaultPlaylist = !hasSlides(cachedDefault);
 
   const currentHash = useRef<string>(hashPlaylist(current as any));
   const swapAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
@@ -438,18 +440,15 @@ const HomeScreen: React.FC = () => {
     }
   }, [isOnline]);
 
-  // ====== حارس انتهاء نافذة Child أثناء الأوفلاين ======
+  // ====== حارس انتهاء نافذة Child أثناء الأوفلاين (باستخدام delay جاهز من السيرفر) ======
   useEffect(() => {
     if (offlineExpiryTimerRef.current) {
       window.clearTimeout(offlineExpiryTimerRef.current);
       offlineExpiryTimerRef.current = null;
     }
-    if (!activeEndAtMs) return;
-
-    const now = Date.now();
-    if (!isOnline) {
-      const delta = activeEndAtMs - now;
-      if (delta <= 0) {
+    if (!isOnline && typeof activeEndDelayMs === "number") {
+      const delay = Math.max(0, activeEndDelayMs); // 0 يعني انتهت النافذة الآن
+      if (delay === 0) {
         // انتهت أصلاً
         forcedDefaultDueToExpiryRef.current = true;
         (async () => {
@@ -473,9 +472,9 @@ const HomeScreen: React.FC = () => {
           setCurrent(def!);
           currentHash.current = hashPlaylist(def as any);
           const g = dGroup("FORCED_DEFAULT_SCHEDULED");
-          g.log({ at: activeEndAtMs, def: describePlaylist(def!) });
+          g.log({ afterMs: delay, def: describePlaylist(def!) });
           g.end();
-        }, Math.max(0, activeEndAtMs - now));
+        }, delay);
       }
     }
     return () => {
@@ -484,7 +483,7 @@ const HomeScreen: React.FC = () => {
         offlineExpiryTimerRef.current = null;
       }
     };
-  }, [isOnline, activeEndAtMs, netMode]);
+  }, [isOnline, activeEndDelayMs, netMode]);
 
   // ✅ عند رجوع الاتصال: لا نستأنف Child من الكاش إذا لا يوجد activeSchedule
   useEffect(() => {
@@ -493,13 +492,11 @@ const HomeScreen: React.FC = () => {
       try {
         await quietRefresh(null);
 
-        // حارس الطلب: أونلاين + لا يوجد Schedule → خليك على Default
         if (!activeScheduleId) {
           const g = dGroup("RESUME_SKIP_NO_SCHEDULE");
           g.log({ note: "online + no schedule → keep default, skip child resume" });
           g.end();
           blockTargetUntil.current = 0;
-          // snapshot
           const swSnap = await snapshotCacheStorage();
           const g2 = dGroup("CACHE_SNAPSHOT_AFTER_RESUME");
           g2.log({ local: snapshotLocalCache(), cacheStorage: swSnap });
@@ -570,7 +567,7 @@ const HomeScreen: React.FC = () => {
     }
   }, [decision.playlist, (decision as any)?.source]);
 
-  // تسخين ثقيل قبل 10 دقائق (لو متوفر قيم من الهُوك)
+  // تسخين ثقيل قبل 10 دقائق (باستخدام delay القادم من السيرفر)
   const prewarmTimerRef = useRef<number | null>(null);
   const stopHeadlessRef = useRef<() => void>(() => {});
 
@@ -579,10 +576,10 @@ const HomeScreen: React.FC = () => {
     try { stopHeadlessRef.current(); } catch {}
     stopHeadlessRef.current = () => {};
 
-    if (nextStartAt && hasSlides(upcomingPlaylist)) {
-      const ms = Math.max(0, nextStartAt - PREWARM_LEAD_MS - Date.now());
+    if (typeof nextStartDelayMs === "number" && hasSlides(upcomingPlaylist)) {
+      const ms = Math.max(0, nextStartDelayMs - PREWARM_LEAD_MS);
       const g = dGroup("SCHEDULE_PREWARM");
-      g.log({ inMs: ms, nextStartAt, upcoming: describePlaylist(upcomingPlaylist) });
+      g.log({ inMs: ms, nextDelayMs: nextStartDelayMs, upcoming: describePlaylist(upcomingPlaylist) });
       g.end();
 
       prewarmTimerRef.current = window.setTimeout(() => {
@@ -594,11 +591,11 @@ const HomeScreen: React.FC = () => {
       try { stopHeadlessRef.current(); } catch {}
       stopHeadlessRef.current = () => {};
     };
-  }, [nextStartAt, upcomingPlaylist]);
+  }, [nextStartDelayMs, upcomingPlaylist]);
 
   // بديل: لو ما في scheduling، سخّن الهدف الحالي عند تغيّره (إلا إذا محظور)
   useEffect(() => {
-    if (nextStartAt && upcomingPlaylist) return;
+    if (typeof nextStartDelayMs === "number" && upcomingPlaylist) return;
 
     try { stopHeadlessRef.current(); } catch {}
     stopHeadlessRef.current = () => {};
@@ -616,7 +613,7 @@ const HomeScreen: React.FC = () => {
       try { stopHeadlessRef.current(); } catch {}
       stopHeadlessRef.current = () => {};
     };
-  }, [targetPlaylist, nextStartAt, upcomingPlaylist]);
+  }, [targetPlaylist, nextStartDelayMs, upcomingPlaylist]);
 
   // Idle full prefetch للـcurrent لما الظروف ممتازة
   useEffect(() => {
@@ -660,56 +657,68 @@ const HomeScreen: React.FC = () => {
   }, [isOnline, netMode, current, next, nextReady, isSwapping]);
 
   // UI
-  if (!screenId) {
-    return (
-      <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
-        Device not linked.
-      </main>
-    );
-  }
-
-  if (!hasSlides(current) && isLoading) {
-    return (
-      <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
-        Loading…
-      </main>
-    );
-  }
-
+if (!screenId) {
   return (
-    <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
-      {hasSlides(current) && (
-        <div className="absolute inset-0">
-          <SmartPlayer
-            key={`current-${hashPlaylist(current as any)}`}
-            playlist={current as PlaylistT}
-            screenId={screenId}
-            scheduleId={activeScheduleId}
-            onRequestRefetch={() => void quietRefresh(null)}
-          />
-        </div>
-      )}
-
-      {hasSlides(next) && (
-        <div
-          className={classNames(
-            "absolute inset-0 transition-opacity duration-300",
-            nextReady ? "opacity-100" : "opacity-0 pointer-events-none"
-          )}
-        >
-          <SmartPlayer
-            key={`next-${hashPlaylist(next as any)}`}
-            playlist={next as PlaylistT}
-            screenId={screenId}
-            scheduleId={activeScheduleId}
-            onRequestRefetch={() => void quietRefresh(null)}
-          />
-        </div>
-      )}
-
-      <div className="pointer-events-none absolute inset-0 bg-black/0" />
+    <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
+      Device not linked.
     </main>
   );
-};
+}
+
+if (!hasSlides(current) && isLoading) {
+  return (
+    <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
+      Loading…
+    </main>
+  );
+}
+
+// ⬇️ Show friendly empty-state when no schedule AND no default
+if (!hasSlides(current) && !isLoading && noServerPlaylist && noDefaultPlaylist) {
+  return (
+    <NoSchedule
+      screenId={screenId}
+      isOnline={isOnline}
+      netMode={netMode}
+      onRefetch={() => void quietRefresh(null)}
+    />
+  );
+}
+
+return (
+  <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
+    {hasSlides(current) && (
+      <div className="absolute inset-0">
+        <SmartPlayer
+          key={`current-${hashPlaylist(current as any)}`}
+          playlist={current as PlaylistT}
+          screenId={screenId}
+          scheduleId={activeScheduleId}
+          onRequestRefetch={() => void quietRefresh(null)}
+        />
+      </div>
+    )}
+
+    {hasSlides(next) && (
+      <div
+        className={classNames(
+          "absolute inset-0 transition-opacity duration-300",
+          nextReady ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}
+      >
+        <SmartPlayer
+          key={`next-${hashPlaylist(next as any)}`}
+          playlist={next as PlaylistT}
+          screenId={screenId}
+          scheduleId={activeScheduleId}
+          onRequestRefetch={() => void quietRefresh(null)}
+        />
+      </div>
+    )}
+
+    <div className="pointer-events-none absolute inset-0 bg-black/0" />
+  </main>
+);
+}
 
 export default HomeScreen;

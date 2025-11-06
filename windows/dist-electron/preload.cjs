@@ -11,3 +11,8 @@ const signage = {
     resetDevice: () => electron_1.ipcRenderer.invoke("signage:resetDevice"),
 };
 electron_1.contextBridge.exposeInMainWorld("signage", signage);
+electron_1.contextBridge.exposeInMainWorld('mediaCache', {
+    mapToLocal: async (urls) => {
+        return electron_1.ipcRenderer.invoke('media-cache:map', urls);
+    },
+});
