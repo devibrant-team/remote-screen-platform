@@ -21,8 +21,12 @@ export function prefetchImage(url?: string): Cancel {
     cancelled = true;
   };
 }
+const DEFAULT_WARM_RANGE = 256 * 1024; // 256KB (بدل 4KB)
+let VIDEO_WARM_RANGE = DEFAULT_WARM_RANGE;
 
-/** Prefetch video HEAD/bytes lightly to warm cache. */
+export function setVideoWarmRange(bytes: number) {
+  VIDEO_WARM_RANGE = Math.max(16 * 1024, Math.min(bytes, 1024 * 1024)); // من 16KB إلى 1MB
+}
 export function prefetchVideo(url?: string): Cancel {
   if (!url) return () => {};
   if (videoCache.has(url)) return () => {};
@@ -40,7 +44,7 @@ export function prefetchVideo(url?: string): Cancel {
     .catch(() => {
       return fetch(url, {
         method: "GET",
-        headers: { Range: "bytes=0-4095" },
+        headers: { Range: `bytes=0-${VIDEO_WARM_RANGE - 1}` },
         signal: ac.signal,
       })
         .then(() => videoCache.add(url))
@@ -49,6 +53,18 @@ export function prefetchVideo(url?: string): Cancel {
     .finally(() => inflightFetches.delete(url));
 
   return () => ac.abort();
+}
+
+// تسخين playlist كاملة (كل الشرائح/السلوتس)
+export function prefetchWholePlaylist(playlist?: {
+  slides?: Array<{ slots: any[] }>;
+}): Cancel {
+  const cancels: Cancel[] = [];
+  const slides = playlist?.slides || [];
+  for (const s of slides) {
+    cancels.push(prefetchSlideMedia(s as any));
+  }
+  return () => cancels.forEach((c) => c());
 }
 
 /** Prefetch all media in a slide (returns a combined cancel). */
@@ -90,4 +106,19 @@ export function isImagePrefetched(url?: string) {
 }
 export function isVideoPrefetched(url?: string) {
   return !!url && videoCache.has(url);
+}
+// أضف في mediaPrefetcher.ts (أنت عندك VIDEO_WARM_RANGE و setVideoWarmRange)
+export function setAdaptiveVideoWarmRange(mode: "ONLINE_GOOD" | "ONLINE_SLOW" | "SERVER_DOWN" | "OFFLINE") {
+  if (mode === "ONLINE_GOOD") setVideoWarmRange(256 * 1024);
+  else if (mode === "ONLINE_SLOW") setVideoWarmRange(512 * 1024);
+  else setVideoWarmRange(128 * 1024); // حالات صعبة: خفّف طلبات الشبكة
+}
+
+export function prefetchWindowSmart(
+  slides: Array<{ slots: any }>,
+  startIndex: number,
+  mode: "ONLINE_GOOD" | "ONLINE_SLOW" | "SERVER_DOWN" | "OFFLINE"
+) {
+  const count = mode === "ONLINE_SLOW" ? 3 : 2;
+  return prefetchWindow(slides as any, startIndex, count);
 }

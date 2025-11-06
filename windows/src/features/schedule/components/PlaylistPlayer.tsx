@@ -18,12 +18,13 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import GridLayout from "./GridLayout";
 
+type PlaylistT = ChildPlaylistResponse["playlist"];
+
 type Props = {
-  playlist: ChildPlaylistResponse["playlist"];
+  playlist: PlaylistT;
   initialIndex?: number;
   screenId?: string | number;
   scheduleId?: string | number;
-  /** Parent can request invalidate/refetch quietly */
   onRequestRefetch?: () => void;
 };
 
@@ -46,7 +47,20 @@ export default function PlaylistPlayer({
 
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const swiperRef = useRef<SwiperClass | null>(null);
+
+  // لتتبّع الالتفاف من آخر شريحة إلى الأولى
+  const prevIndexRef = useRef<number>(initialIndex);
+
+  // فيديوهات + منظومة حُرّاس + منع تكرار degraded لنفس الشريحة
   const videoRefs = useRef<Record<number, HTMLVideoElement[]>>({});
+  const videoGuardsCleanup = useRef<Map<HTMLVideoElement, () => void>>(new Map());
+  const lastDegradedSlideRef = useRef<number | null>(null);
+
+  const fireDegradedOnce = (slideId: number) => {
+    if (lastDegradedSlideRef.current === slideId) return;
+    lastDegradedSlideRef.current = slideId;
+    window.dispatchEvent(new CustomEvent("playback:degraded"));
+  };
 
   const slideTo = (idx: number) => {
     if (!slides.length) return;
@@ -56,7 +70,18 @@ export default function PlaylistPlayer({
   };
   const next = () => slideTo(activeIndex + 1);
 
-  // Keep index safe when slide count changes
+  // دعم Skip-once: لو HomeScreen قرر نتجاوز شريحة سيئة
+  useEffect(() => {
+    const onSkip = () => {
+      // نتجاوز الشريحة الحالية مرة واحدة
+      next();
+    };
+    window.addEventListener("playlist:skip-once", onSkip);
+    return () => window.removeEventListener("playlist:skip-once", onSkip);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex, slides.length]);
+
+  // حافظ على الفهرس ضمن الحدود وتحديث الـSwiper
   useEffect(() => {
     if (!slides.length) return;
     if (activeIndex >= slides.length) {
@@ -71,34 +96,98 @@ export default function PlaylistPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slides.length]);
 
-  // Prefetch: current + next 2 slides
+  // Prefetch: الحالية + 2 قدّام (يمكن رفعها لـ3 لو بدك تربطها بـnetMode)
   useEffect(() => {
     if (!slides.length) return;
-    const cancelCurrent = prefetchSlideMedia(slides[activeIndex]);
-    const cancelWindow = prefetchWindow(slides, activeIndex, 2);
+    const cancelCurrent = prefetchSlideMedia(slides[activeIndex] as any);
+    const cancelWindow = prefetchWindow(slides as any, activeIndex, 2);
     return () => {
       cancelCurrent();
       cancelWindow();
     };
   }, [activeIndex, slides]);
 
-  // Autoplay timing — use backend duration strictly
+  function attachVideoGuards(videoEl: HTMLVideoElement, slideId: number) {
+    const prev = videoGuardsCleanup.current.get(videoEl);
+    if (prev) prev();
+
+    let ready = videoEl.readyState >= 2;
+
+    const guardTimer = setTimeout(() => {
+      if (!ready) fireDegradedOnce(slideId);
+    }, 10000); // 10s لأول إطار
+
+    const onCanPlay = () => { ready = true; };
+    const onPlaying = () => { ready = true; };
+    const onStalled = () => fireDegradedOnce(slideId);
+    const onError = () => fireDegradedOnce(slideId);
+
+    let lastTime = 0;
+    let stagnantTimer: any = 0;
+    const onTimeUpdate = () => {
+      const t = videoEl.currentTime;
+      if (t <= lastTime + 0.01) {
+        if (!stagnantTimer) {
+          stagnantTimer = setTimeout(() => fireDegradedOnce(slideId), 5000); // توقف التقدم 5s
+        }
+      } else {
+        if (stagnantTimer) {
+          clearTimeout(stagnantTimer);
+          stagnantTimer = 0;
+        }
+        lastTime = t;
+      }
+    };
+
+    videoEl.addEventListener("canplay", onCanPlay);
+    videoEl.addEventListener("playing", onPlaying);
+    videoEl.addEventListener("stalled", onStalled);
+    videoEl.addEventListener("error", onError);
+    videoEl.addEventListener("timeupdate", onTimeUpdate);
+
+    const cleanup = () => {
+      clearTimeout(guardTimer);
+      if (stagnantTimer) clearTimeout(stagnantTimer);
+      videoEl.removeEventListener("canplay", onCanPlay);
+      videoEl.removeEventListener("playing", onPlaying);
+      videoEl.removeEventListener("stalled", onStalled);
+      videoEl.removeEventListener("error", onError);
+      videoEl.removeEventListener("timeupdate", onTimeUpdate);
+    };
+
+    videoGuardsCleanup.current.set(videoEl, cleanup);
+    return cleanup;
+  }
+
+  // تشغيل الشريحة الفعّالة + تفعيل الحراس + كشف اكتمال الدورة
   useEffect(() => {
-    const slide = slides[activeIndex];
+    const slide = slides[activeIndex] as PlaylistSlide | undefined;
     if (!slide) return;
 
-    // Pause videos not on the active slide
+    // كشف اكتمال الدورة: آخر → 0
+    const prev = prevIndexRef.current;
+    if (slides.length > 0 && prev === slides.length - 1 && activeIndex === 0) {
+      window.dispatchEvent(new CustomEvent("playlist:loop"));
+    }
+    prevIndexRef.current = activeIndex;
+
+    // reset منع التكرار للشريحة الحالية
+    lastDegradedSlideRef.current = null;
+
+    // أوقف بقية الفيديوهات
     Object.entries(videoRefs.current).forEach(([sid, list]) => {
       if (Number(sid) !== slide.id) list.forEach((v) => v.pause());
     });
 
-    // Start videos on the active slide (do not control timing by video end)
+    // شغّل فيديوهات الشريحة الحالية
     const vids = videoRefs.current[slide.id] || [];
     vids.forEach((v) => {
       try {
+        v.preload = "auto";
         v.currentTime = 0;
         v.muted = true;
         v.playsInline = true;
+        attachVideoGuards(v, slide.id);
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
       } catch {}
@@ -113,15 +202,22 @@ export default function PlaylistPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, slides]);
 
-  // Collect video refs per slide
   const registerVideo = (slideId: number, el: HTMLVideoElement | null) => {
     if (!el) return;
-    const list = (videoRefs.current[slideId] =
-      videoRefs.current[slideId] || []);
+    const list = (videoRefs.current[slideId] = videoRefs.current[slideId] || []);
     if (!list.includes(el)) list.push(el);
   };
 
-  // Reverb: slide control + playlist reload
+  useEffect(() => {
+    return () => {
+      videoGuardsCleanup.current.forEach((fn) => {
+        try { fn(); } catch {}
+      });
+      videoGuardsCleanup.current.clear();
+    };
+  }, []);
+
+  // Reverb: تحكم بالشريحة + إعادة تحميل
   useEffect(() => {
     if (!screenId && !scheduleId) return;
 
@@ -141,7 +237,6 @@ export default function PlaylistPlayer({
           onRequestRefetch();
           return;
         }
-        // Fallback invalidate from inside the player
         if (screenId) {
           qc.invalidateQueries({
             queryKey: ["parentSchedules", String(screenId)],
@@ -224,7 +319,7 @@ export default function PlaylistPlayer({
               <GridLayout
                 slide={s}
                 onVideoRef={(el) => registerVideo(s.id, el)}
-                gap={0} // set to 8 for gap-2 style
+                gap={0}
               />
             </div>
           </SwiperSlide>

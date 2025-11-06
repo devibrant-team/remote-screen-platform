@@ -8,4 +8,6 @@ export const qk = {
   ) => ["childPlaylist", scheduleId, screenId] as const,
   def: (screenId?: string | number | undefined) =>
     ["defaultPlaylist", screenId] as const,
+  timeclock: () => ["timeclock"] as const,
+
 };
