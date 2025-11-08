@@ -8,6 +8,7 @@ import { store } from "../store.ts";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import { registerServiceWorker } from "./swRegister";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,4 +30,5 @@ createRoot(document.getElementById("root")!).render(
     </Provider>
   </StrictMode>
 );
+registerServiceWorker();
 

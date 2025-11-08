@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import SmartPlayer from "../features/schedule/components/SmartPlayer";
 import { useScreenId } from "../features/schedule/hooks/useScreenId";
-import { echo, ReverbConnection, persistAuthTokenFromEvent } from "../echo";
+import { echo, ReverbConnection } from "../echo";
 import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlaylist";
 import {
   setNowPlaying,
@@ -20,13 +20,15 @@ import {
   prefetchWindow,
   prefetchWholePlaylist,
   setAdaptiveVideoWarmRange,
-  probeBandwidth,
 } from "../utils/mediaPrefetcher";
 import type { ChildPlaylistResponse } from "../types/schedule";
 import { currentNetMode, type NetMode } from "../utils/netHealth";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
-type ScheduleUpdatePayload = { scheduleId?: number | string; schedule_id?: number | string } & Record<string, unknown>;
+type ScheduleUpdatePayload = { scheduleId?: number | string } & Record<
+  string,
+  unknown
+>;
 
 const hasSlides = (pl?: PlaylistT | null): pl is PlaylistT =>
   !!pl && Array.isArray(pl.slides) && pl.slides.length > 0;
@@ -35,22 +37,24 @@ function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
 
-/* ========== Debug Utilities (fluent) ========== */
-type DebugGroup = { log: (obj: Record<string, any>) => DebugGroup; end: () => void };
-const DEBUG = true as const;
-const dGroup = (label: string): DebugGroup => {
-  if (!DEBUG) {
-    const noop: DebugGroup = { log: () => noop, end: () => {} };
-    return noop;
-  }
+/* ========== Debug Utilities ========== */
+const DEBUG = true;
+
+const dGroup = (label: string) => {
+  if (!DEBUG) return { log: (_: any) => {}, end: () => {} };
   const ts = new Date().toISOString();
   // eslint-disable-next-line no-console
   console.groupCollapsed(`[HomeScreen] ${label} @ ${ts}`);
-  const api: DebugGroup = {
-    log: (obj) => { /* eslint-disable no-console */ console.log(obj); /* eslint-enable */ return api; },
-    end: () => { /* eslint-disable no-console */ console.groupEnd(); /* eslint-enable */ },
+  return {
+    log: (obj: Record<string, any>) => {
+      // eslint-disable-next-line no-console
+      console.log(obj);
+    },
+    end: () => {
+      // eslint-disable-next-line no-console
+      console.groupEnd();
+    },
   };
-  return api;
 };
 
 const describePlaylist = (pl: PlaylistT | null) => ({
@@ -66,7 +70,10 @@ async function snapshotCacheStorage() {
     for (const name of names) {
       const cache = await caches.open(name);
       const reqs = await cache.keys();
-      details[name] = { count: reqs.length, sample: reqs.slice(0, 5).map((r) => r.url) };
+      details[name] = {
+        count: reqs.length,
+        sample: reqs.slice(0, 5).map((r) => r.url),
+      };
     }
     return { supported: true, names, details } as const;
   } catch (e) {
@@ -80,22 +87,37 @@ function snapshotLocalCache() {
   const now = getNowPlaying();
   return {
     lastDefault: lastDefault
-      ? { savedAt: lastDefault.savedAt, slides: lastDefault.playlist?.slides?.length ?? 0, source: lastDefault.source }
+      ? {
+          savedAt: lastDefault.savedAt,
+          slides: lastDefault.playlist?.slides?.length ?? 0,
+          source: lastDefault.source,
+        }
       : null,
     lastChild: lastChild
-      ? { savedAt: lastChild.savedAt, slides: lastChild.playlist?.slides?.length ?? 0, source: lastChild.source }
+      ? {
+          savedAt: lastChild.savedAt,
+          slides: lastChild.playlist?.slides?.length ?? 0,
+          source: lastChild.source,
+        }
       : null,
     nowPlaying: now
-      ? { savedAt: now.savedAt, slides: now.playlist?.slides?.length ?? 0, source: now.source }
+      ? {
+          savedAt: now.savedAt,
+          slides: now.playlist?.slides?.length ?? 0,
+          source: now.source,
+        }
       : null,
   };
 }
 
-/* ────────────────────────────────────────────
-   Prefetch helpers
-────────────────────────────────────────────── */
+/* ========== Prefetch Utilities ========== */
 
-async function warmPlaylistLight(pl: PlaylistT | null, windowCount = 2, timeoutMs = 800) {
+// خفيف
+async function warmPlaylistLight(
+  pl: PlaylistT | null,
+  windowCount = 2,
+  timeoutMs = 800
+) {
   if (!hasSlides(pl)) return;
   const cancels: Array<() => void> = [];
   try {
@@ -108,6 +130,7 @@ async function warmPlaylistLight(pl: PlaylistT | null, windowCount = 2, timeoutM
   }
 }
 
+// ثقيل
 function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
   if (!hasSlides(playlist)) return () => {};
 
@@ -133,7 +156,6 @@ function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
         v.preload = "auto";
         v.muted = true;
         v.playsInline = true;
-        v.crossOrigin = "anonymous";
         v.src = url;
         v.style.position = "absolute";
         v.style.width = "1px";
@@ -154,11 +176,16 @@ function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
   const timer = window.setTimeout(() => {}, maxMs);
 
   return () => {
-    try { window.clearTimeout(timer); } catch {}
+    try {
+      window.clearTimeout(timer);
+    } catch {}
     try {
       created.forEach((el) => {
         if (el instanceof HTMLVideoElement) {
-          try { el.pause(); el.src = ""; } catch {}
+          try {
+            el.pause();
+            el.src = "";
+          } catch {}
         }
       });
       if (holder.parentNode) holder.parentNode.removeChild(holder);
@@ -167,9 +194,7 @@ function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
   };
 }
 
-/* ────────────────────────────────────────────
-   Component
-────────────────────────────────────────────── */
+/* ========== Component ========== */
 
 const PREWARM_LEAD_MS = 10 * 60 * 1000;
 
@@ -182,17 +207,29 @@ const HomeScreen: React.FC = () => {
     decision,
     isLoading,
     quietRefreshAll,
+    // من الهُوك (تأخيرات فقط)
     activeEndDelayMs,
     nextStartDelayMs,
     upcomingPlaylist,
   } = useResolvedPlaylist(screenId);
 
+  // اتصال
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
 
   useEffect(() => {
-    const on = () => { setIsOnline(true); dGroup("NET_ONLINE").end(); };
-    const off = () => { setIsOnline(false); dGroup("NET_OFFLINE").end(); };
+    const on = () => {
+      setIsOnline(true);
+      const g = dGroup("NET_ONLINE");
+      g.log({ isOnline: true });
+      g.end();
+    };
+    const off = () => {
+      setIsOnline(false);
+      const g = dGroup("NET_OFFLINE");
+      g.log({ isOnline: false });
+      g.end();
+    };
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
     return () => {
@@ -201,6 +238,7 @@ const HomeScreen: React.FC = () => {
     };
   }, []);
 
+  // مراقبة netMode + تكييف مدى تسخين الفيديو
   useEffect(() => {
     const tick = () => {
       const m = currentNetMode();
@@ -212,48 +250,61 @@ const HomeScreen: React.FC = () => {
     return () => window.clearInterval(id);
   }, []);
 
-  // Probe bandwidth once when we know a candidate video URL
-  useEffect(() => {
-    const pl =
-      (decision?.playlist as PlaylistT | null) ||
-      (upcomingPlaylist as PlaylistT | null) ||
-      null;
-
-    const sample =
-      pl?.slides
-        ?.flatMap((s: any) => s?.slots || [])
-        ?.find((slot: any) => String(slot?.mediaType || "").toLowerCase() === "video")
-        ?.ImageFile || null;
-
-    if (sample) probeBandwidth(sample).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hashPlaylist((decision?.playlist as any) || null)]);
-
-  const latest = useRef<{ screenId?: string | number; scheduleId?: string | number; }>({});
+  const latest = useRef<{
+    screenId?: string | number;
+    scheduleId?: string | number;
+  }>({});
   useEffect(() => {
     latest.current = { screenId, scheduleId: activeScheduleId };
-    dGroup("STATE")
-      .log({ screenId, activeScheduleId, isOnline, netMode, activeEndDelayMs, nextStartDelayMs })
-      .end();
-  }, [screenId, activeScheduleId, isOnline, netMode, activeEndDelayMs, nextStartDelayMs]);
+    const g = dGroup("STATE");
+    g.log({
+      screenId,
+      activeScheduleId,
+      isOnline,
+      netMode,
+      activeEndDelayMs,
+      nextStartDelayMs,
+    });
+    g.end();
+  }, [
+    screenId,
+    activeScheduleId,
+    isOnline,
+    netMode,
+    activeEndDelayMs,
+    nextStartDelayMs,
+  ]);
 
   const cachedDefault: PlaylistT | null = useMemo(() => {
     const cached = loadLastGoodDefault();
     const pl = (cached?.playlist as PlaylistT | undefined) || null;
-    if (hasSlides(pl)) dGroup("CACHED_DEFAULT").log(describePlaylist(pl)).end();
-    return pl || null;
+    if (hasSlides(pl)) {
+      const g = dGroup("CACHED_DEFAULT");
+      g.log(describePlaylist(pl));
+      g.end();
+      return pl;
+    }
+    return null;
   }, []);
 
   const targetPlaylist: PlaylistT | null = useMemo(() => {
     const serverPl = (decision.playlist as PlaylistT | undefined) || null;
     const target = hasSlides(serverPl) ? serverPl : cachedDefault;
-    const reason = hasSlides(serverPl) ? `decision:${(decision as any)?.source}` : cachedDefault ? "cached-default" : "none";
-    dGroup("TARGET").log({ reason, ...describePlaylist(target || null) }).end();
+    const reason = hasSlides(serverPl)
+      ? `decision:${(decision as any)?.source}`
+      : cachedDefault
+      ? "cached-default"
+      : "none";
+    const g = dGroup("TARGET");
+    g.log({ reason, ...describePlaylist(target || null) });
+    g.end();
     return target || null;
   }, [decision.playlist, (decision as any)?.source, cachedDefault]);
 
   // -------- Double Buffering --------
-  const [current, setCurrent] = useState<PlaylistT | null>(() => targetPlaylist);
+  const [current, setCurrent] = useState<PlaylistT | null>(
+    () => targetPlaylist
+  );
   const [next, setNext] = useState<PlaylistT | null>(null);
   const [nextReady, setNextReady] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
@@ -261,12 +312,15 @@ const HomeScreen: React.FC = () => {
   const currentHash = useRef<string>(hashPlaylist(current as any));
   const swapAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
 
+  // قفل/حظر
   const degradedLockUntil = useRef<number>(0);
   const blockTargetUntil = useRef<number>(0);
 
+  // فلاغ انتهاء نافذة child أثناء الأوفلاين
   const forcedDefaultDueToExpiryRef = useRef<boolean>(false);
+  const offlineExpiryTimerRef = useRef<number | null>(null);
 
-  // Swap when target changes
+  // سواب عند تغيّر الهدف (إلا إذا محظور مؤقتًا)
   useEffect(() => {
     const targetHash = hashPlaylist(targetPlaylist as any);
     if (Date.now() < blockTargetUntil.current) return;
@@ -277,14 +331,18 @@ const HomeScreen: React.FC = () => {
 
     setNext(targetPlaylist);
     setNextReady(false);
-    dGroup("STAGE_NEXT").log({ target: describePlaylist(targetPlaylist) }).end();
+    let g = dGroup("STAGE_NEXT");
+    g.log({ target: describePlaylist(targetPlaylist) });
+    g.end();
 
     (async () => {
       const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
       await warmPlaylistLight(targetPlaylist, winCount, 800);
       if (swapAbortRef.current.aborted) return;
       setNextReady(true);
-      dGroup("NEXT_READY").log(describePlaylist(targetPlaylist)).end();
+      g = dGroup("NEXT_READY");
+      g.log(describePlaylist(targetPlaylist));
+      g.end();
 
       setIsSwapping(true);
       setTimeout(() => {
@@ -294,61 +352,76 @@ const HomeScreen: React.FC = () => {
         setIsSwapping(false);
         setNext(null);
         setNextReady(false);
-        dGroup("SWAP_DONE").log({ current: describePlaylist(targetPlaylist) }).end();
+        const g2 = dGroup("SWAP_DONE");
+        g2.log({ current: describePlaylist(targetPlaylist) });
+        g2.end();
       }, 250);
     })();
 
-    return () => { swapAbortRef.current.aborted = true; };
+    return () => {
+      swapAbortRef.current.aborted = true;
+    };
   }, [targetPlaylist, netMode]);
 
-  // Save what is displayed
+  // حفظ ما يُعرض
   useEffect(() => {
     if (!hasSlides(current)) return;
     const sameAsDecision =
       hasSlides(decision.playlist as any) &&
       hashPlaylist(decision.playlist as any) === hashPlaylist(current as any);
     const source: "child" | "default" =
-      sameAsDecision && (decision as any).source === "child" ? "child" : "default";
+      sameAsDecision && (decision as any).source === "child"
+        ? "child"
+        : "default";
     setNowPlaying(source, current);
-    dGroup("DISPLAY_NOW").log({ source, ...describePlaylist(current) }).end();
+    const g = dGroup("DISPLAY_NOW");
+    g.log({ source, ...describePlaylist(current) });
+    g.end();
   }, [current, decision.playlist, (decision as any).source]);
 
   const quietRefresh = async (overrideScheduleId?: number | string | null) => {
     if (Date.now() < blockTargetUntil.current) return;
-    await quietRefreshAll(overrideScheduleId ?? latest.current.scheduleId ?? null);
+    await quietRefreshAll(
+      overrideScheduleId ?? latest.current.scheduleId ?? null
+    );
   };
 
-  // Server push — quiet refresh (فكّ الأقفال + التقاط snake/camel + حفظ التوكن)
+  // دفع السيرفر — تحديث هادئ
   useEffect(() => {
     if (!screenId) return;
     const channelName = `screens.${screenId}`;
     const channel = echo.channel(channelName);
 
     let refreshTimer: number | undefined;
-
-    const triggerRefresh = (sid: number | string | null, payload?: any) => {
-      try { persistAuthTokenFromEvent?.(payload); } catch {}
-
-      // فكّ الأقفال: اسمح بالتبديل فورًا بعد أي Push
-      blockTargetUntil.current = 0;
-      forcedDefaultDueToExpiryRef.current = false;
-
+    const triggerRefresh = (sid: number | string | null) => {
+      if (Date.now() < blockTargetUntil.current) return;
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(async () => {
-        dGroup("SERVER_PUSH").log({ channelName, sid, note: "quietRefresh start" }).end();
+        const g = dGroup("SERVER_PUSH");
+        g.log({ channelName, sid, note: "quietRefresh start" });
+        g.end();
         try {
           await quietRefresh(sid);
-          dGroup("REFRESH_DONE").log({ channelName, sid }).end();
+          const g2 = dGroup("REFRESH_DONE");
+          g2.log({ channelName, sid });
+          g2.end();
         } catch (err) {
-          dGroup("REFRESH_ERR").log({ err: String(err) }).end();
+          const g3 = dGroup("REFRESH_ERR");
+          g3.log({ err: String(err) });
+          g3.end();
         }
-      }, 100);
+      }, 75);
     };
 
     const on = (label: string) => (payload: ScheduleUpdatePayload) => {
-      const sid = (payload?.scheduleId ?? payload?.schedule_id ?? latest.current.scheduleId ?? null) as number | string | null;
-      dGroup("SERVER_EVENT").log({ label, payload, sid }).end();
-      triggerRefresh(sid, payload);
+      const sid = (payload?.scheduleId ?? latest.current.scheduleId ?? null) as
+        | number
+        | string
+        | null;
+      const g = dGroup("SERVER_EVENT");
+      g.log({ label, payload, sid });
+      g.end();
+      triggerRefresh(sid);
     };
 
     channel.listen(".ScheduleUpdate", on("ScheduleUpdate"));
@@ -356,7 +429,9 @@ const HomeScreen: React.FC = () => {
 
     const off = ReverbConnection.onStatus((s) => {
       if (s === "connected") {
-        try { echo.leave(channelName); } catch {}
+        try {
+          echo.leave(channelName);
+        } catch {}
         const c = echo.channel(channelName);
         c.listen(".ScheduleUpdate", on("ScheduleUpdate(reconnect)"));
         c.listen(".PlaylistReload", on("PlaylistReload(reconnect)"));
@@ -375,53 +450,94 @@ const HomeScreen: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, qc]);
 
-  // Save child after loop
+  // احفظ Child بعد اكتمال دورة
   useEffect(() => {
     const onLoop = () => {
       if (!hasSlides(current)) return;
       if ((decision as any)?.source === "child") {
         saveLastGoodChild(current);
-        dGroup("LOOP_SAVED_CHILD").log(describePlaylist(current)).end();
+        const g = dGroup("LOOP_SAVED_CHILD");
+        g.log(describePlaylist(current));
+        g.end();
       }
     };
     window.addEventListener("playlist:loop", onLoop);
     return () => window.removeEventListener("playlist:loop", onLoop);
   }, [current, (decision as any)?.source]);
 
-  // Degraded fallback (skip-once)
+  // fallback خفيف عند التدهور (skip-once)
   useEffect(() => {
     const onDegraded = async () => {
       const now = Date.now();
       if (now < degradedLockUntil.current) return;
       window.dispatchEvent(new CustomEvent("playlist:skip-once"));
-      degradedLockUntil.current = now + 5000;
       blockTargetUntil.current = now + 5000;
+      degradedLockUntil.current = now + 5000;
+      return;
     };
     window.addEventListener("playback:degraded", onDegraded);
     return () => window.removeEventListener("playback:degraded", onDegraded);
   }, []);
 
-  // عندما ينتهي child window أونلاين → أظهر default قسراً
+  // عند فقد الاتصال: لا سواب، نظل نعرض الحالي
   useEffect(() => {
-    if (typeof activeEndDelayMs !== "number") return;
-    if (!isOnline) return;
-    if (activeEndDelayMs > 0) return;
+    if (!isOnline) {
+      blockTargetUntil.current = Date.now() + 15_000;
+      const g = dGroup("OFFLINE_HOLD");
+      g.log({ until: blockTargetUntil.current });
+      g.end();
+    }
+  }, [isOnline]);
 
-    forcedDefaultDueToExpiryRef.current = true;
+  // ====== حارس انتهاء نافذة Child أثناء الأوفلاين (باستخدام delay جاهز من السيرفر) ======
+  useEffect(() => {
+    if (offlineExpiryTimerRef.current) {
+      window.clearTimeout(offlineExpiryTimerRef.current);
+      offlineExpiryTimerRef.current = null;
+    }
+    if (!isOnline && typeof activeEndDelayMs === "number") {
+      const delay = Math.max(0, activeEndDelayMs); // 0 يعني انتهت النافذة الآن
+      if (delay === 0) {
+        // انتهت أصلاً
+        forcedDefaultDueToExpiryRef.current = true;
+        (async () => {
+          const def = loadLastGoodDefault()?.playlist as PlaylistT | undefined;
+          if (!hasSlides(def)) return;
+          const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
+          await warmPlaylistLight(def!, winCount, 500);
+          setCurrent(def!);
+          currentHash.current = hashPlaylist(def as any);
+          const g = dGroup("FORCED_DEFAULT_IMMEDIATE");
+          g.log({
+            reason: "child window expired offline",
+            def: describePlaylist(def!),
+          });
+          g.end();
+        })();
+      } else {
+        offlineExpiryTimerRef.current = window.setTimeout(async () => {
+          forcedDefaultDueToExpiryRef.current = true;
+          const def = loadLastGoodDefault()?.playlist as PlaylistT | undefined;
+          if (!hasSlides(def)) return;
+          const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
+          await warmPlaylistLight(def!, winCount, 500);
+          setCurrent(def!);
+          currentHash.current = hashPlaylist(def as any);
+          const g = dGroup("FORCED_DEFAULT_SCHEDULED");
+          g.log({ afterMs: delay, def: describePlaylist(def!) });
+          g.end();
+        }, delay);
+      }
+    }
+    return () => {
+      if (offlineExpiryTimerRef.current) {
+        window.clearTimeout(offlineExpiryTimerRef.current);
+        offlineExpiryTimerRef.current = null;
+      }
+    };
+  }, [isOnline, activeEndDelayMs, netMode]);
 
-    (async () => {
-      const def = loadLastGoodDefault()?.playlist as PlaylistT | undefined;
-      if (!hasSlides(def)) return;
-      const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
-      await warmPlaylistLight(def!, winCount, 500);
-      setCurrent(def!);
-      currentHash.current = hashPlaylist(def as any);
-      setNowPlaying("default", def!);
-      dGroup("FORCED_DEFAULT_ON_EXPIRY").log({ def: describePlaylist(def!) }).end();
-    })();
-  }, [activeEndDelayMs, isOnline, netMode]);
-
-  // بعد عودة النت: لا ترجع child من الكاش إذا انتهت نافذته (لكن افتح الطريق)
+  // ✅ عند رجوع الاتصال: لا نستأنف Child من الكاش إذا لا يوجد activeSchedule
   useEffect(() => {
     if (!isOnline) return;
     (async () => {
@@ -429,37 +545,88 @@ const HomeScreen: React.FC = () => {
         await quietRefresh(null);
 
         if (!activeScheduleId) {
-          dGroup("RESUME_SKIP_NO_SCHEDULE").log({ note: "online + no schedule → keep default" }).end();
+          const g = dGroup("RESUME_SKIP_NO_SCHEDULE");
+          g.log({
+            note: "online + no schedule → keep default, skip child resume",
+          });
+          g.end();
           blockTargetUntil.current = 0;
           const swSnap = await snapshotCacheStorage();
-          dGroup("CACHE_SNAPSHOT_AFTER_RESUME").log({ local: snapshotLocalCache(), cacheStorage: swSnap }).end();
+          const g2 = dGroup("CACHE_SNAPSHOT_AFTER_RESUME");
+          g2.log({ local: snapshotLocalCache(), cacheStorage: swSnap });
+          g2.end();
           return;
         }
 
-        // لا نرجّع child من الكاش إذا كان Expired — ننتظر قرار السيرفر
+        if (forcedDefaultDueToExpiryRef.current) {
+          const g = dGroup("RESUME_BLOCKED_DUE_TO_EXPIRED_CHILD");
+          g.log({ note: "skip resume-from-cache; wait server decision" });
+          g.end();
+        } else {
+          const childCached = loadLastGoodChild()?.playlist as
+            | PlaylistT
+            | undefined;
+          if (hasSlides(childCached)) {
+            const childHash = hashPlaylist(childCached as any);
+            const currHash = hashPlaylist(current as any);
+            if (childHash !== currHash) {
+              swapAbortRef.current.aborted = true;
+              setNext(null);
+              setNextReady(false);
+              setIsSwapping(false);
+
+              const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
+              await warmPlaylistLight(childCached!, winCount, 500);
+              setCurrent(childCached!);
+              currentHash.current = childHash;
+
+              const g = dGroup("RESUME_CHILD_FROM_CACHE");
+              g.log({
+                child: describePlaylist(childCached!),
+                curr: describePlaylist(current),
+              });
+              g.end();
+            } else {
+              const g = dGroup("RESUME_CHILD_SKIP");
+              g.log({ reason: "already on child or same hash" });
+              g.end();
+            }
+          } else {
+            const g = dGroup("RESUME_CHILD_NO_CACHE");
+            g.log({});
+            g.end();
+          }
+        }
+
         blockTargetUntil.current = 0;
 
         const localSnap = snapshotLocalCache();
         const swSnap = await snapshotCacheStorage();
-        dGroup("CACHE_SNAPSHOT_AFTER_RESUME").log({ local: localSnap, cacheStorage: swSnap }).end();
+        const g2 = dGroup("CACHE_SNAPSHOT_AFTER_RESUME");
+        g2.log({ local: localSnap, cacheStorage: swSnap });
+        g2.end();
       } catch (e) {
-        dGroup("RESUME_CHILD_ERR").log({ e: String(e) }).end();
+        const g = dGroup("RESUME_CHILD_ERR");
+        g.log({ e: String(e) });
+        g.end();
       }
     })();
-  }, [isOnline, netMode, activeScheduleId]);
+  }, [isOnline, netMode, current, activeScheduleId]);
 
-  // تنظيف forced flag عند Child جديد بهاش مختلف
+  // صفّر الفلاغ تلقائيًا عندما يصل Child جديد بهاش مختلف
   useEffect(() => {
     if (!hasSlides(decision.playlist)) return;
     if ((decision as any).source === "child") {
       if (hashPlaylist(decision.playlist) !== currentHash.current) {
         forcedDefaultDueToExpiryRef.current = false;
-        dGroup("CLEAR_FORCED_FLAG_ON_NEW_CHILD").log({ note: "new child arrived with different hash" }).end();
+        const g = dGroup("CLEAR_FORCED_FLAG_ON_NEW_CHILD");
+        g.log({ note: "new child arrived with different hash" });
+        g.end();
       }
     }
   }, [decision.playlist, (decision as any)?.source]);
 
-  // Prewarm قبل الجدولة القادمة
+  // تسخين ثقيل قبل 10 دقائق (باستخدام delay القادم من السيرفر)
   const prewarmTimerRef = useRef<number | null>(null);
   const stopHeadlessRef = useRef<() => void>(() => {});
 
@@ -468,19 +635,26 @@ const HomeScreen: React.FC = () => {
       window.clearTimeout(prewarmTimerRef.current);
       prewarmTimerRef.current = null;
     }
-    try { stopHeadlessRef.current(); } catch {}
+    try {
+      stopHeadlessRef.current();
+    } catch {}
     stopHeadlessRef.current = () => {};
 
     if (typeof nextStartDelayMs === "number" && hasSlides(upcomingPlaylist)) {
       const ms = Math.max(0, nextStartDelayMs - PREWARM_LEAD_MS);
-      dGroup("SCHEDULE_PREWARM").log({
+      const g = dGroup("SCHEDULE_PREWARM");
+      g.log({
         inMs: ms,
         nextDelayMs: nextStartDelayMs,
         upcoming: describePlaylist(upcomingPlaylist),
-      }).end();
+      });
+      g.end();
 
       prewarmTimerRef.current = window.setTimeout(() => {
-        stopHeadlessRef.current = headlessWarmDOM(upcomingPlaylist, 3 * 60 * 1000);
+        stopHeadlessRef.current = headlessWarmDOM(
+          upcomingPlaylist,
+          3 * 60 * 1000
+        );
       }, ms);
     }
     return () => {
@@ -488,31 +662,40 @@ const HomeScreen: React.FC = () => {
         window.clearTimeout(prewarmTimerRef.current);
         prewarmTimerRef.current = null;
       }
-      try { stopHeadlessRef.current(); } catch {}
+      try {
+        stopHeadlessRef.current();
+      } catch {}
       stopHeadlessRef.current = () => {};
     };
   }, [nextStartDelayMs, upcomingPlaylist]);
 
-  // Headless warm عند تغيير target بدون جدولة
+  // بديل: لو ما في scheduling، سخّن الهدف الحالي عند تغيّره (إلا إذا محظور)
   useEffect(() => {
     if (typeof nextStartDelayMs === "number" && upcomingPlaylist) return;
 
-    try { stopHeadlessRef.current(); } catch {}
+    try {
+      stopHeadlessRef.current();
+    } catch {}
     stopHeadlessRef.current = () => {};
 
     if (Date.now() < blockTargetUntil.current) return;
     if (hasSlides(targetPlaylist)) {
-      dGroup("HEADLESS_WARM_NOW").log(describePlaylist(targetPlaylist)).end();
+      const g = dGroup("HEADLESS_WARM_NOW");
+      g.log(describePlaylist(targetPlaylist));
+      g.end();
+
       stopHeadlessRef.current = headlessWarmDOM(targetPlaylist, 2 * 60 * 1000);
     }
 
     return () => {
-      try { stopHeadlessRef.current(); } catch {}
+      try {
+        stopHeadlessRef.current();
+      } catch {}
       stopHeadlessRef.current = () => {};
     };
   }, [targetPlaylist, nextStartDelayMs, upcomingPlaylist]);
 
-  // Idle full prefetch لما الظروف ممتازة
+  // Idle full prefetch للـcurrent لما الظروف ممتازة
   useEffect(() => {
     if (!hasSlides(current)) return;
     if (netMode !== "ONLINE_GOOD") return;
@@ -521,7 +704,7 @@ const HomeScreen: React.FC = () => {
     return () => cancel();
   }, [current, netMode, nextReady, isSwapping]);
 
-  // Heartbeat
+  // Heartbeat كل 15 ثانية
   const didSnapshotOnce = useRef(false);
   useEffect(() => {
     const id = window.setInterval(async () => {
@@ -537,7 +720,9 @@ const HomeScreen: React.FC = () => {
           degradedLockUntil: degradedLockUntil.current,
           blockTargetUntil: blockTargetUntil.current,
         },
-        flags: { forcedDefaultDueToExpiry: forcedDefaultDueToExpiryRef.current },
+        flags: {
+          forcedDefaultDueToExpiry: forcedDefaultDueToExpiryRef.current,
+        },
         nowPlaying: getNowPlaying(),
       });
       if (!didSnapshotOnce.current) {
@@ -552,7 +737,6 @@ const HomeScreen: React.FC = () => {
   }, [isOnline, netMode, current, next, nextReady, isSwapping]);
 
   // UI
-
   if (!screenId) {
     return (
       <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
@@ -568,10 +752,6 @@ const HomeScreen: React.FC = () => {
       </main>
     );
   }
-
-  // حزام أمان: Splash بدل السواد لو لا current ولا next جاهز
-  const noRenderable =
-    !hasSlides(current) && (!hasSlides(next) || !nextReady);
 
   return (
     <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
@@ -601,15 +781,6 @@ const HomeScreen: React.FC = () => {
             scheduleId={activeScheduleId}
             onRequestRefetch={() => void quietRefresh(null)}
           />
-        </div>
-      )}
-
-      {noRenderable && (
-        <div className="absolute inset-0 grid place-items-center bg-black text-white">
-          <div className="text-center opacity-70">
-            <div className="text-2xl font-semibold">Devibrant Player</div>
-            <div className="text-sm mt-1">Preparing content…</div>
-          </div>
         </div>
       )}
 

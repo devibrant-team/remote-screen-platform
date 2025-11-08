@@ -1,22 +1,17 @@
+// src/features/schedule/components/PlaylistPlayer.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import type {
-  ChildPlaylistResponse,
-  PlaylistSlide,
-} from "../../../types/schedule";
+import type { ChildPlaylistResponse, PlaylistSlide } from "../../../types/schedule";
 import { Swiper, SwiperSlide } from "swiper/react";
 import { EffectFade } from "swiper/modules";
 import type { Swiper as SwiperClass } from "swiper";
 import {
   prefetchSlideMedia,
-  prefetchWindow,
+  prefetchWindowSmart,
 } from "../../../utils/mediaPrefetcher";
-import {
-  echo,
-  ReverbConnection,
-  persistAuthTokenFromEvent,
-} from "../../../echo";
+import { echo, ReverbConnection, persistAuthTokenFromEvent } from "../../../echo";
 import { useQueryClient } from "@tanstack/react-query";
 import GridLayout from "./GridLayout";
+import { currentNetMode, type NetMode } from "../../../utils/netHealth";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 
@@ -27,6 +22,54 @@ type Props = {
   scheduleId?: string | number;
   onRequestRefetch?: () => void;
 };
+
+/** ينتظر أول فريم لفيديو معيّن (أو canplay/playing) بمهلة محددة */
+function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; cleanup(); resolve(); } };
+
+    if (!vid) return finish();
+    if (vid.readyState >= 2) return finish();
+
+    const t = setTimeout(finish, timeoutMs);
+
+    const onCanPlay = () => finish();
+    const onPlaying = () => finish();
+
+    // أدقّ طريقة إن متوفرة
+    let cbId: number | null = null;
+    const rVFC = (vid as any).requestVideoFrameCallback?.(
+      () => finish()
+    );
+    cbId = (typeof rVFC === "number" ? rVFC : null) as number | null;
+
+    function cleanup() {
+      clearTimeout(t);
+      vid.removeEventListener("canplay", onCanPlay);
+      vid.removeEventListener("playing", onPlaying);
+      if (cbId && (vid as any).cancelVideoFrameCallback) {
+        try { (vid as any).cancelVideoFrameCallback(cbId); } catch {}
+      }
+    }
+
+    vid.addEventListener("canplay", onCanPlay, { once: true });
+    vid.addEventListener("playing", onPlaying, { once: true });
+  });
+}
+
+/** ينتظر أول فريم للفيديو الأساسي ضمن عنصر شريحة */
+async function waitForPrimaryVideoReady(container: HTMLElement | null, timeoutMs = 700) {
+  if (!container) return;
+  const vid = container.querySelector("video") as HTMLVideoElement | null;
+  if (!vid) return; // الشريحة ما فيها فيديو
+  try {
+    // حاول التشغيل لضمان فك الـdecoder
+    const p = vid.play();
+    if (p?.catch) p.catch(() => {});
+  } catch {}
+  await waitForFirstFrame(vid, timeoutMs);
+}
 
 export default function PlaylistPlayer({
   playlist,
@@ -48,13 +91,19 @@ export default function PlaylistPlayer({
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const swiperRef = useRef<SwiperClass | null>(null);
 
-  // لتتبّع الالتفاف من آخر شريحة إلى الأولى
+  const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
+  useEffect(() => {
+    const id = window.setInterval(() => setNetMode(currentNetMode()), 4000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const prevIndexRef = useRef<number>(initialIndex);
 
-  // فيديوهات + منظومة حُرّاس + منع تكرار degraded لنفس الشريحة
   const videoRefs = useRef<Record<number, HTMLVideoElement[]>>({});
   const videoGuardsCleanup = useRef<Map<HTMLVideoElement, () => void>>(new Map());
   const lastDegradedSlideRef = useRef<number | null>(null);
+
+  const [showOverlay, setShowOverlay] = useState(false);
 
   const fireDegradedOnce = (slideId: number) => {
     if (lastDegradedSlideRef.current === slideId) return;
@@ -70,25 +119,20 @@ export default function PlaylistPlayer({
   };
   const next = () => slideTo(activeIndex + 1);
 
-  // دعم Skip-once: لو HomeScreen قرر نتجاوز شريحة سيئة
   useEffect(() => {
-    const onSkip = () => {
-      // نتجاوز الشريحة الحالية مرة واحدة
-      next();
-    };
+    const onSkip = () => next();
     window.addEventListener("playlist:skip-once", onSkip);
     return () => window.removeEventListener("playlist:skip-once", onSkip);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, slides.length]);
 
-  // حافظ على الفهرس ضمن الحدود وتحديث الـSwiper
   useEffect(() => {
     if (!slides.length) return;
     if (activeIndex >= slides.length) {
       const safe = Math.max(0, slides.length - 1);
       if (safe !== activeIndex) {
         setActiveIndex(safe);
-        swiperRef.current?.slideTo(safe, 0); // no animation
+        swiperRef.current?.slideTo(safe, 0);
       }
     } else {
       swiperRef.current?.update?.();
@@ -96,16 +140,16 @@ export default function PlaylistPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slides.length]);
 
-  // Prefetch: الحالية + 2 قدّام (يمكن رفعها لـ3 لو بدك تربطها بـnetMode)
+  // Prefetch: current + window (adaptive by netMode)
   useEffect(() => {
     if (!slides.length) return;
     const cancelCurrent = prefetchSlideMedia(slides[activeIndex] as any);
-    const cancelWindow = prefetchWindow(slides as any, activeIndex, 2);
+    const cancelWindow = prefetchWindowSmart(slides as any, activeIndex, netMode);
     return () => {
       cancelCurrent();
       cancelWindow();
     };
-  }, [activeIndex, slides]);
+  }, [activeIndex, slides, netMode]);
 
   function attachVideoGuards(videoEl: HTMLVideoElement, slideId: number) {
     const prev = videoGuardsCleanup.current.get(videoEl);
@@ -128,7 +172,7 @@ export default function PlaylistPlayer({
       const t = videoEl.currentTime;
       if (t <= lastTime + 0.01) {
         if (!stagnantTimer) {
-          stagnantTimer = setTimeout(() => fireDegradedOnce(slideId), 5000); // توقف التقدم 5s
+          stagnantTimer = setTimeout(() => fireDegradedOnce(slideId), 5000);
         }
       } else {
         if (stagnantTimer) {
@@ -139,6 +183,13 @@ export default function PlaylistPlayer({
       }
     };
 
+    // دعم إطار دقيق إن توفر
+    let frameCbId: number | null = null;
+    const onFrame: VideoFrameRequestCallback = () => {
+      frameCbId = (videoEl as any).requestVideoFrameCallback?.(onFrame) ?? null;
+    };
+    (videoEl as any).requestVideoFrameCallback?.(onFrame);
+
     videoEl.addEventListener("canplay", onCanPlay);
     videoEl.addEventListener("playing", onPlaying);
     videoEl.addEventListener("stalled", onStalled);
@@ -148,6 +199,9 @@ export default function PlaylistPlayer({
     const cleanup = () => {
       clearTimeout(guardTimer);
       if (stagnantTimer) clearTimeout(stagnantTimer);
+      if (frameCbId && (videoEl as any).cancelVideoFrameCallback) {
+        try { (videoEl as any).cancelVideoFrameCallback(frameCbId); } catch {}
+      }
       videoEl.removeEventListener("canplay", onCanPlay);
       videoEl.removeEventListener("playing", onPlaying);
       videoEl.removeEventListener("stalled", onStalled);
@@ -159,12 +213,11 @@ export default function PlaylistPlayer({
     return cleanup;
   }
 
-  // تشغيل الشريحة الفعّالة + تفعيل الحراس + كشف اكتمال الدورة
+  // تشغيل الشريحة الفعّالة + حُرّاس + كشف اكتمال الدورة
   useEffect(() => {
     const slide = slides[activeIndex] as PlaylistSlide | undefined;
     if (!slide) return;
 
-    // كشف اكتمال الدورة: آخر → 0
     const prev = prevIndexRef.current;
     if (slides.length > 0 && prev === slides.length - 1 && activeIndex === 0) {
       window.dispatchEvent(new CustomEvent("playlist:loop"));
@@ -184,9 +237,10 @@ export default function PlaylistPlayer({
     vids.forEach((v) => {
       try {
         v.preload = "auto";
-        v.currentTime = 0;
         v.muted = true;
         v.playsInline = true;
+        v.crossOrigin = "anonymous";
+        v.style.willChange = "transform, opacity";
         attachVideoGuards(v, slide.id);
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
@@ -202,12 +256,23 @@ export default function PlaylistPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, slides]);
 
+  // تسجيل الفيديوهات فور دخولها DOM
   const registerVideo = (slideId: number, el: HTMLVideoElement | null) => {
     if (!el) return;
+    el.preload = "auto";
+    el.playsInline = true;
+    el.muted = true;
+    el.crossOrigin = "anonymous";
+    el.controls = false;
+    el.disablePictureInPicture = true;
+    el.setAttribute("controlsList", "nodownload noplaybackrate noremoteplayback");
+    el.style.willChange = "transform, opacity";
+
     const list = (videoRefs.current[slideId] = videoRefs.current[slideId] || []);
     if (!list.includes(el)) list.push(el);
   };
 
+  // تنظيف
   useEffect(() => {
     return () => {
       videoGuardsCleanup.current.forEach((fn) => {
@@ -217,7 +282,7 @@ export default function PlaylistPlayer({
     };
   }, []);
 
-  // Reverb: تحكم بالشريحة + إعادة تحميل
+  // Reverb
   useEffect(() => {
     if (!screenId && !scheduleId) return;
 
@@ -243,7 +308,7 @@ export default function PlaylistPlayer({
             refetchType: "active",
           });
         }
-        const sid = e?.scheduleId ?? scheduleId;
+        const sid = e?.scheduleId ?? e?.schedule_id ?? scheduleId;
         if (sid && screenId) {
           qc.invalidateQueries({
             queryKey: ["childPlaylist", String(sid), String(screenId)],
@@ -271,7 +336,7 @@ export default function PlaylistPlayer({
       return cleanup;
     };
 
-    const unsubs: Array<(() => void) | undefined> = [];
+    const unsubs: Array<() => void | undefined> = [];
     if (screenId) unsubs.push(attach(`screens.${screenId}`));
     if (scheduleId) unsubs.push(attach(`schedule.${scheduleId}`));
 
@@ -294,19 +359,58 @@ export default function PlaylistPlayer({
   if (!slides.length) return null;
 
   return (
-    <div className="w-screen h-[100dvh] bg-black text-white overflow-hidden">
+    <div className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
+      {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
+      <div
+        className={`pointer-events-none absolute inset-0 bg-black transition-opacity duration-150 ${showOverlay ? "opacity-30" : "opacity-0"}`}
+      />
+
       <Swiper
         modules={[EffectFade]}
         effect="fade"
-        fadeEffect={{ crossFade: true }}
+        fadeEffect={{ crossFade: true }}   // ✅ تراكب حقيقي بدون فجوة سوداء
+        speed={320}
         onSwiper={(sw) => {
           swiperRef.current = sw;
           sw.slideTo(initialIndex);
         }}
         onSlideChange={(sw) => setActiveIndex(sw.activeIndex)}
+        onSlideChangeTransitionStart={async (sw) => {
+          // جهّز الهدف قبل قطع الحاليين
+          const target = sw.activeIndex;
+          const slideEl = sw.slides?.[target] as HTMLElement | undefined;
+          setShowOverlay(true);
+
+          // شغّل فيديوهات الهدف فوراً (إن وجدت)
+          const targetSlide = slides[target];
+          const vidsTarget = videoRefs.current[targetSlide?.id || 0] || [];
+          vidsTarget.forEach((v) => {
+            try {
+              v.preload = "auto";
+              v.muted = true;
+              v.playsInline = true;
+              const p = v.play();
+              if (p?.catch) p.catch(() => {});
+            } catch {}
+          });
+
+          // انتظار أول فريم (أو 120ms إن ما في فيديو)
+          if (vidsTarget.length) {
+            await waitForPrimaryVideoReady(slideEl || null, 700);
+          } else {
+            await new Promise((r) => setTimeout(r, 120));
+          }
+
+          // الآن أوقف غير الهدف
+          Object.entries(videoRefs.current).forEach(([sid, list]) => {
+            if (Number(sid) !== targetSlide?.id) list.forEach(v => { try { v.pause(); } catch {} });
+          });
+
+          // ارفع الـoverlay بعد شعرة
+          setTimeout(() => setShowOverlay(false), 60);
+        }}
         allowTouchMove={false}
         keyboard={{ enabled: false }}
-        speed={400}
         initialSlide={initialIndex}
         observer
         observeParents
@@ -315,7 +419,7 @@ export default function PlaylistPlayer({
       >
         {slides.map((s: PlaylistSlide) => (
           <SwiperSlide key={s.id} className="!w-full !h-full">
-            <div className="w-full h-full">
+            <div className="w-full h-full bg-black">
               <GridLayout
                 slide={s}
                 onVideoRef={(el) => registerVideo(s.id, el)}

@@ -1,4 +1,3 @@
-// windows/src/ReactQuery/schedule/useParentSchedules.ts
 import axios from "axios";
 import { useQuery } from "@tanstack/react-query";
 import { GetParentScheduleApi } from "../../Api/Api";
@@ -33,6 +32,11 @@ export function useParentSchedules(screenId?: string) {
   });
 }
 
+// يلتقط scheduleId سواء scheduleId أو schedule_id أو id
+export function pickScheduleId(x: any) {
+  return x?.scheduleId ?? x?.schedule_id ?? x?.id ?? null;
+}
+
 /** Derives the currently active schedule (by time) + next upcoming */
 export function useActiveSchedule(screenId?: string) {
   const parent = useParentSchedules(screenId);
@@ -44,6 +48,6 @@ export function useActiveSchedule(screenId?: string) {
       ? pickActiveAndNext(date, items)
       : { active: undefined, next: null };
 
-  const activeScheduleId = active?.scheduleId;
+  const activeScheduleId = active ? pickScheduleId(active) : undefined;
   return { parent, active, next, activeScheduleId };
 }

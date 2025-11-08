@@ -1,9 +1,8 @@
-// windows/src/features/schedule/hooks/useTimedSchedule.ts
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParentSchedules } from "../../../ReactQuery/schedule/useParentSchedules";
 import type { ParentScheduleItem } from "../../../types/schedule";
 import { pickActiveAndNext, nextBoundaryMs } from "../../../utils/timeWindow";
+import { pickScheduleId } from "../../../ReactQuery/schedule/useParentSchedules";
 
 export function useTimedSchedule(screenId?: string) {
   const parent = useParentSchedules(screenId);
@@ -25,10 +24,10 @@ export function useTimedSchedule(screenId?: string) {
     return pickActiveAndNext(day, items);
   }, [day, items]);
 
-  // Keep activeScheduleId in sync with computed state
+  // Keep activeScheduleId in sync (يدعم camel+snake)
   useEffect(() => {
-    setActiveScheduleId(computed.active?.scheduleId);
-  }, [computed.active?.scheduleId]);
+    setActiveScheduleId(pickScheduleId(computed.active) ?? undefined);
+  }, [computed.active]);
 
   // Arm a precise timer to switch at the next boundary (start or end)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,10 +50,9 @@ export function useTimedSchedule(screenId?: string) {
     timerRef.current = setTimeout(() => {
       // Recompute from current cache (quick)…
       const { active } = pickActiveAndNext(day, items, new Date());
-      setActiveScheduleId(active?.scheduleId);
+      setActiveScheduleId(pickScheduleId(active) ?? undefined);
 
-      // …and also ask React Query to refresh the parent list around the boundary
-      // to pick up any last-second server changes:
+      // …and also refresh the parent list
       parent.refetch();
     }, delay);
 
@@ -68,8 +66,9 @@ export function useTimedSchedule(screenId?: string) {
     const id = setInterval(() => {
       if (!day) return;
       const { active } = pickActiveAndNext(day, items, new Date());
-      if (active?.scheduleId !== activeScheduleId) {
-        setActiveScheduleId(active?.scheduleId);
+      const newId = pickScheduleId(active) ?? undefined;
+      if (newId !== activeScheduleId) {
+        setActiveScheduleId(newId);
       }
     }, 30_000); // every 30s
     return () => clearInterval(id);

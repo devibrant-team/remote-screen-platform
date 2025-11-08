@@ -1,12 +1,25 @@
 // src/utils/mediaPrefetcher.ts
+// Prefetch helpers for images/videos + adaptive warm range for smoother playback.
+
 type Cancel = () => void;
 
 const imageCache = new Set<string>();
 const videoCache = new Set<string>();
 const inflightFetches = new Map<string, AbortController>();
 
+/** توحيد URL الميديا: إزالة cb=.. إن وُجد لمنع اختلافات بين التسخين والتشغيل */
+export function normalizeMediaUrl(url?: string): string | undefined {
+  if (!url) return url;
+  const u = url
+    .replace(/([?&])cb=\d+(&|$)/, (_m, p1, p2) => (p2 ? p1 : ""))
+    .replace(/\?&$/, "?")
+    .replace(/\?$/, "");
+  return u;
+}
+
 /** Prefetch an image URL into the browser cache. */
 export function prefetchImage(url?: string): Cancel {
+  url = normalizeMediaUrl(url);
   if (!url) return () => {};
   if (imageCache.has(url)) return () => {};
 
@@ -21,50 +34,86 @@ export function prefetchImage(url?: string): Cancel {
     cancelled = true;
   };
 }
-const DEFAULT_WARM_RANGE = 256 * 1024; // 256KB (بدل 4KB)
-let VIDEO_WARM_RANGE = DEFAULT_WARM_RANGE;
+
+/* ──────────────────────────────────────────────────────────────
+   Adaptive warm range for VIDEOS
+────────────────────────────────────────────────────────────── */
+const MIN_RANGE = 256 * 1024;           // 256 KB
+const MAX_RANGE = 12 * 1024 * 1024;     // 12 MB
+let VIDEO_WARM_RANGE = 4 * 1024 * 1024; // 4 MB افتراضي
 
 export function setVideoWarmRange(bytes: number) {
-  VIDEO_WARM_RANGE = Math.max(16 * 1024, Math.min(bytes, 1024 * 1024)); // من 16KB إلى 1MB
+  VIDEO_WARM_RANGE = Math.max(MIN_RANGE, Math.min(bytes, MAX_RANGE));
 }
+
+/** Quick bandwidth probe (1 MB range GET) to adapt warm size dynamically. */
+let lastMbps = 0;
+export async function probeBandwidth(urlSample: string): Promise<number> {
+  try {
+    const t0 = performance.now();
+    const size = 1 * 1024 * 1024 - 1; // 1 MB chunk
+    const url = normalizeMediaUrl(urlSample)!;
+    await fetch(url, {
+      method: "GET",
+      headers: { Range: `bytes=0-${size}` },
+      cache: "no-store",
+      credentials: "omit",
+    });
+    const ms = Math.max(1, performance.now() - t0);
+    const mbps = (1 /*MB*/ * 8 * 1000) / ms; // megabits/s
+    lastMbps = mbps;
+
+    // Heuristic: دفّئ ~5 ثواني (سقف 12Mbps لتجنب المبالغة).
+    const targetMb = Math.min(mbps, 12) * 5 / 8; // MB
+    const targetBytes = Math.round(targetMb * 1024 * 1024);
+    setVideoWarmRange(targetBytes);
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[prefetch] probe ≈ ${mbps.toFixed(2)} Mbps → warm ~${(targetBytes/1024/1024).toFixed(1)} MB`
+    );
+    return mbps;
+  } catch {
+    return lastMbps || 0;
+  }
+}
+
+/** Coarse adaptation when we don't have a probe yet. */
+export function setAdaptiveVideoWarmRange(
+  mode: "ONLINE_GOOD" | "ONLINE_SLOW" | "SERVER_DOWN" | "OFFLINE"
+) {
+  if (mode === "ONLINE_GOOD") setVideoWarmRange(6 * 1024 * 1024);      // 6 MB
+  else if (mode === "ONLINE_SLOW") setVideoWarmRange(8 * 1024 * 1024); // 8 MB
+  else setVideoWarmRange(3 * 1024 * 1024);                              // 3 MB
+}
+
+/** Prefetch a small initial byte range of the video (seeds HTTP cache). */
 export function prefetchVideo(url?: string): Cancel {
+  url = normalizeMediaUrl(url);
   if (!url) return () => {};
   if (videoCache.has(url)) return () => {};
 
   if (inflightFetches.has(url)) {
-    const ac = inflightFetches.get(url)!;
-    return () => ac.abort();
+    const existing = inflightFetches.get(url)!;
+    return () => existing.abort();
   }
 
   const ac = new AbortController();
   inflightFetches.set(url, ac);
 
-  fetch(url, { method: "HEAD", signal: ac.signal })
-    .then(() => videoCache.add(url))
-    .catch(() => {
-      return fetch(url, {
-        method: "GET",
-        headers: { Range: `bytes=0-${VIDEO_WARM_RANGE - 1}` },
-        signal: ac.signal,
-      })
-        .then(() => videoCache.add(url))
-        .catch(() => {});
-    })
-    .finally(() => inflightFetches.delete(url));
+  // Prefer ranged GET (HEAD sometimes blocked/incorrect behind CDNs)
+  fetch(url, {
+    method: "GET",
+    headers: { Range: `bytes=0-${VIDEO_WARM_RANGE - 1}` },
+    signal: ac.signal,
+    cache: "default", // اسمح بإعادة الاستخدام
+    credentials: "omit",
+  })
+    .then(() => videoCache.add(url!))
+    .catch(() => {})
+    .finally(() => inflightFetches.delete(url!));
 
   return () => ac.abort();
-}
-
-// تسخين playlist كاملة (كل الشرائح/السلوتس)
-export function prefetchWholePlaylist(playlist?: {
-  slides?: Array<{ slots: any[] }>;
-}): Cancel {
-  const cancels: Cancel[] = [];
-  const slides = playlist?.slides || [];
-  for (const s of slides) {
-    cancels.push(prefetchSlideMedia(s as any));
-  }
-  return () => cancels.forEach((c) => c());
 }
 
 /** Prefetch all media in a slide (returns a combined cancel). */
@@ -73,9 +122,10 @@ export function prefetchSlideMedia(slide: {
 }): Cancel {
   const cancels: Cancel[] = [];
   for (const slot of slide.slots || []) {
-    const url = slot.ImageFile;
-    const isVideo = (slot.mediaType || "").toLowerCase() === "video";
-    cancels.push(isVideo ? prefetchVideo(url) : prefetchImage(url));
+    const url = normalizeMediaUrl(slot?.ImageFile);
+    const type = String(slot?.mediaType || "").toLowerCase();
+    if (!url) continue;
+    cancels.push(type === "video" ? prefetchVideo(url) : prefetchImage(url));
   }
   return () => cancels.forEach((c) => c());
 }
@@ -94,26 +144,32 @@ export function prefetchWindow(
   for (let i = 1; i <= toPrefetch; i++) {
     const idx = (startIndex + i) % len;
     const slide = slides[idx];
-    if (slide) {
-      cancels.push(prefetchSlideMedia(slide));
-    }
+    if (slide) cancels.push(prefetchSlideMedia(slide as any));
+  }
+  return () => cancels.forEach((c) => c());
+}
+
+/** Prefetch playlist (all slides). */
+export function prefetchWholePlaylist(playlist?: {
+  slides?: Array<{ slots: any[] }>;
+}): Cancel {
+  const cancels: Cancel[] = [];
+  for (const s of playlist?.slides || []) {
+    cancels.push(prefetchSlideMedia(s as any));
   }
   return () => cancels.forEach((c) => c());
 }
 
 export function isImagePrefetched(url?: string) {
-  return !!url && imageCache.has(url);
+  const u = normalizeMediaUrl(url);
+  return !!u && imageCache.has(u);
 }
 export function isVideoPrefetched(url?: string) {
-  return !!url && videoCache.has(url);
-}
-// أضف في mediaPrefetcher.ts (أنت عندك VIDEO_WARM_RANGE و setVideoWarmRange)
-export function setAdaptiveVideoWarmRange(mode: "ONLINE_GOOD" | "ONLINE_SLOW" | "SERVER_DOWN" | "OFFLINE") {
-  if (mode === "ONLINE_GOOD") setVideoWarmRange(256 * 1024);
-  else if (mode === "ONLINE_SLOW") setVideoWarmRange(512 * 1024);
-  else setVideoWarmRange(128 * 1024); // حالات صعبة: خفّف طلبات الشبكة
+  const u = normalizeMediaUrl(url);
+  return !!u && videoCache.has(u);
 }
 
+/** Smart window size by net mode. */
 export function prefetchWindowSmart(
   slides: Array<{ slots: any }>,
   startIndex: number,
