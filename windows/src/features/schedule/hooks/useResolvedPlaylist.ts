@@ -115,16 +115,28 @@ export function useResolvedPlaylist(screenId?: string) {
     if (!activeScheduleId) {
       // 1) أحدث Default من السيرفر لو متوفّر
       if (hasSlides(defaultQ.data?.playlist)) {
-        return { source: "default", playlist: defaultQ.data!.playlist, reason: "no schedule → fresh default" };
+        return {
+          source: "default",
+          playlist: defaultQ.data!.playlist,
+          reason: "no schedule → fresh default",
+        };
       }
       // 2) الكاش المحلي للـDefault
       const cachedDef = loadLastGoodDefault();
       if (hasSlides(cachedDef?.playlist)) {
-        return { source: "cache", playlist: cachedDef!.playlist, reason: "no schedule → cached default" };
+        return {
+          source: "cache",
+          playlist: cachedDef!.playlist,
+          reason: "no schedule → cached default",
+        };
       }
       // 3) لو الـrunning الحالي كان Default، خليه
       if (hasSlides(running?.playlist) && running?.source === "default") {
-        return { source: "cache", playlist: running!.playlist, reason: "no schedule → keep running default" };
+        return {
+          source: "cache",
+          playlist: running!.playlist,
+          reason: "no schedule → keep running default",
+        };
       }
       // 4) لا شيء متاح
       return { source: "empty", playlist: null, reason: "no schedule → no default available" };
@@ -200,7 +212,10 @@ export function useResolvedPlaylist(screenId?: string) {
   const isLoadingSafe = anyLoading && !hasSlides(decision.playlist);
 
   return {
-    parent, active, next, activeScheduleId,
+    parent,
+    active,
+    next,
+    activeScheduleId,
     decision,
     isLoading: isLoadingSafe,
     isError: parent.isError && child.isError && defaultQ.isError,

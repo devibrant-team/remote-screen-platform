@@ -27,7 +27,13 @@ type Props = {
 function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
   return new Promise<void>((resolve) => {
     let done = false;
-    const finish = () => { if (!done) { done = true; cleanup(); resolve(); } };
+    const finish = () => {
+      if (!done) {
+        done = true;
+        cleanup();
+        resolve();
+      }
+    };
 
     if (!vid) return finish();
     if (vid.readyState >= 2) return finish();
@@ -39,9 +45,7 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
 
     // أدقّ طريقة إن متوفرة
     let cbId: number | null = null;
-    const rVFC = (vid as any).requestVideoFrameCallback?.(
-      () => finish()
-    );
+    const rVFC = (vid as any).requestVideoFrameCallback?.(() => finish());
     cbId = (typeof rVFC === "number" ? rVFC : null) as number | null;
 
     function cleanup() {
@@ -49,7 +53,9 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
       vid.removeEventListener("canplay", onCanPlay);
       vid.removeEventListener("playing", onPlaying);
       if (cbId && (vid as any).cancelVideoFrameCallback) {
-        try { (vid as any).cancelVideoFrameCallback(cbId); } catch {}
+        try {
+          (vid as any).cancelVideoFrameCallback(cbId);
+        } catch {}
       }
     }
 
@@ -59,7 +65,10 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
 }
 
 /** ينتظر أول فريم للفيديو الأساسي ضمن عنصر شريحة */
-async function waitForPrimaryVideoReady(container: HTMLElement | null, timeoutMs = 700) {
+async function waitForPrimaryVideoReady(
+  container: HTMLElement | null,
+  timeoutMs = 700
+) {
   if (!container) return;
   const vid = container.querySelector("video") as HTMLVideoElement | null;
   if (!vid) return; // الشريحة ما فيها فيديو
@@ -101,15 +110,22 @@ export default function PlaylistPlayer({
 
   const videoRefs = useRef<Record<number, HTMLVideoElement[]>>({});
   const videoGuardsCleanup = useRef<Map<HTMLVideoElement, () => void>>(new Map());
-  const lastDegradedSlideRef = useRef<number | null>(null);
 
   const [showOverlay, setShowOverlay] = useState(false);
 
-  const fireDegradedOnce = (slideId: number) => {
-    if (lastDegradedSlideRef.current === slideId) return;
-    lastDegradedSlideRef.current = slideId;
-    window.dispatchEvent(new CustomEvent("playback:degraded"));
-  };
+  // حُرّاس مبسّطين للفيديو (حالياً فقط لإبقاء channel للـ cleanup لو احتجناه)
+  function attachVideoGuards(videoEl: HTMLVideoElement) {
+    const prev = videoGuardsCleanup.current.get(videoEl);
+    if (prev) prev();
+
+    // هنا يمكن مستقبلاً نضيف logging أو مراقبة خفيفة من غير أي skip
+    const cleanup = () => {
+      // لا listeners حالياً
+    };
+
+    videoGuardsCleanup.current.set(videoEl, cleanup);
+    return cleanup;
+  }
 
   const slideTo = (idx: number) => {
     if (!slides.length) return;
@@ -151,69 +167,7 @@ export default function PlaylistPlayer({
     };
   }, [activeIndex, slides, netMode]);
 
-  function attachVideoGuards(videoEl: HTMLVideoElement, slideId: number) {
-    const prev = videoGuardsCleanup.current.get(videoEl);
-    if (prev) prev();
-
-    let ready = videoEl.readyState >= 2;
-
-    const guardTimer = setTimeout(() => {
-      if (!ready) fireDegradedOnce(slideId);
-    }, 10000); // 10s لأول إطار
-
-    const onCanPlay = () => { ready = true; };
-    const onPlaying = () => { ready = true; };
-    const onStalled = () => fireDegradedOnce(slideId);
-    const onError = () => fireDegradedOnce(slideId);
-
-    let lastTime = 0;
-    let stagnantTimer: any = 0;
-    const onTimeUpdate = () => {
-      const t = videoEl.currentTime;
-      if (t <= lastTime + 0.01) {
-        if (!stagnantTimer) {
-          stagnantTimer = setTimeout(() => fireDegradedOnce(slideId), 5000);
-        }
-      } else {
-        if (stagnantTimer) {
-          clearTimeout(stagnantTimer);
-          stagnantTimer = 0;
-        }
-        lastTime = t;
-      }
-    };
-
-    // دعم إطار دقيق إن توفر
-    let frameCbId: number | null = null;
-    const onFrame: VideoFrameRequestCallback = () => {
-      frameCbId = (videoEl as any).requestVideoFrameCallback?.(onFrame) ?? null;
-    };
-    (videoEl as any).requestVideoFrameCallback?.(onFrame);
-
-    videoEl.addEventListener("canplay", onCanPlay);
-    videoEl.addEventListener("playing", onPlaying);
-    videoEl.addEventListener("stalled", onStalled);
-    videoEl.addEventListener("error", onError);
-    videoEl.addEventListener("timeupdate", onTimeUpdate);
-
-    const cleanup = () => {
-      clearTimeout(guardTimer);
-      if (stagnantTimer) clearTimeout(stagnantTimer);
-      if (frameCbId && (videoEl as any).cancelVideoFrameCallback) {
-        try { (videoEl as any).cancelVideoFrameCallback(frameCbId); } catch {}
-      }
-      videoEl.removeEventListener("canplay", onCanPlay);
-      videoEl.removeEventListener("playing", onPlaying);
-      videoEl.removeEventListener("stalled", onStalled);
-      videoEl.removeEventListener("error", onError);
-      videoEl.removeEventListener("timeupdate", onTimeUpdate);
-    };
-
-    videoGuardsCleanup.current.set(videoEl, cleanup);
-    return cleanup;
-  }
-
-  // تشغيل الشريحة الفعّالة + حُرّاس + كشف اكتمال الدورة
+  // تشغيل الشريحة الفعّالة + تشغيل فيديوهاتها + كشف loop
   useEffect(() => {
     const slide = slides[activeIndex] as PlaylistSlide | undefined;
     if (!slide) return;
@@ -223,9 +177,6 @@ export default function PlaylistPlayer({
       window.dispatchEvent(new CustomEvent("playlist:loop"));
     }
     prevIndexRef.current = activeIndex;
-
-    // reset منع التكرار للشريحة الحالية
-    lastDegradedSlideRef.current = null;
 
     // أوقف بقية الفيديوهات
     Object.entries(videoRefs.current).forEach(([sid, list]) => {
@@ -241,7 +192,7 @@ export default function PlaylistPlayer({
         v.playsInline = true;
         v.crossOrigin = "anonymous";
         v.style.willChange = "transform, opacity";
-        attachVideoGuards(v, slide.id);
+        attachVideoGuards(v);
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
       } catch {}
@@ -251,6 +202,7 @@ export default function PlaylistPlayer({
       Number.isFinite(slide.duration) && (slide.duration as number) > 0;
     if (!hasDuration) return;
 
+    // 🔴 هون المنطق الجديد: الانتقال مبني فقط على مدة الشريحة
     const t = window.setTimeout(next, (slide.duration as number) * 1000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -265,10 +217,14 @@ export default function PlaylistPlayer({
     el.crossOrigin = "anonymous";
     el.controls = false;
     el.disablePictureInPicture = true;
-    el.setAttribute("controlsList", "nodownload noplaybackrate noremoteplayback");
+    el.setAttribute(
+      "controlsList",
+      "nodownload noplaybackrate noremoteplayback"
+    );
     el.style.willChange = "transform, opacity";
 
-    const list = (videoRefs.current[slideId] = videoRefs.current[slideId] || []);
+    const list = (videoRefs.current[slideId] =
+      videoRefs.current[slideId] || []);
     if (!list.includes(el)) list.push(el);
   };
 
@@ -276,7 +232,9 @@ export default function PlaylistPlayer({
   useEffect(() => {
     return () => {
       videoGuardsCleanup.current.forEach((fn) => {
-        try { fn(); } catch {}
+        try {
+          fn();
+        } catch {}
       });
       videoGuardsCleanup.current.clear();
     };
@@ -362,13 +320,15 @@ export default function PlaylistPlayer({
     <div className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
       {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
       <div
-        className={`pointer-events-none absolute inset-0 bg-black transition-opacity duration-150 ${showOverlay ? "opacity-30" : "opacity-0"}`}
+        className={`pointer-events-none absolute inset-0 bg-black transition-opacity duration-150 ${
+          showOverlay ? "opacity-30" : "opacity-0"
+        }`}
       />
 
       <Swiper
         modules={[EffectFade]}
         effect="fade"
-        fadeEffect={{ crossFade: true }}   // ✅ تراكب حقيقي بدون فجوة سوداء
+        fadeEffect={{ crossFade: true }} // ✅ تراكب حقيقي بدون فجوة سوداء
         speed={320}
         onSwiper={(sw) => {
           swiperRef.current = sw;
@@ -403,7 +363,12 @@ export default function PlaylistPlayer({
 
           // الآن أوقف غير الهدف
           Object.entries(videoRefs.current).forEach(([sid, list]) => {
-            if (Number(sid) !== targetSlide?.id) list.forEach(v => { try { v.pause(); } catch {} });
+            if (Number(sid) !== targetSlide?.id)
+              list.forEach((v) => {
+                try {
+                  v.pause();
+                } catch {}
+              });
           });
 
           // ارفع الـoverlay بعد شعرة

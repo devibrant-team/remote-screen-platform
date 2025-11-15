@@ -388,18 +388,7 @@ const HomeScreen: React.FC = () => {
     return () => window.removeEventListener("playlist:loop", onLoop);
   }, [current, (decision as any)?.source]);
 
-  // Degraded fallback (skip-once)
-  useEffect(() => {
-    const onDegraded = async () => {
-      const now = Date.now();
-      if (now < degradedLockUntil.current) return;
-      window.dispatchEvent(new CustomEvent("playlist:skip-once"));
-      degradedLockUntil.current = now + 5000;
-      blockTargetUntil.current = now + 5000;
-    };
-    window.addEventListener("playback:degraded", onDegraded);
-    return () => window.removeEventListener("playback:degraded", onDegraded);
-  }, []);
+
 
   // عندما ينتهي child window أونلاين → أظهر default قسراً
   useEffect(() => {

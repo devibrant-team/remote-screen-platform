@@ -5,13 +5,9 @@ import { useTimedSchedule } from "./useTimedSchedule";
 import { useChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
 import { prefetchNextPlaylist } from "../../../ReactQuery/schedule/prefetchNextPlaylist";
 import type { ParentScheduleItem } from "../../../types/schedule";
+import { useServerClockStrict } from "../../../utils/useServerClockStrict";
 
 export const LS_SCREEN_ID = "screenId";
-
-function timeToStartMs(item: ParentScheduleItem, dayDate: string, now = new Date()) {
-  const t = new Date(`${dayDate}T${item.start_time}`).getTime();
-  return t - now.getTime();
-}
 
 export function useTimedScheduleData() {
   const screenId =
@@ -20,15 +16,19 @@ export function useTimedScheduleData() {
   const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
   const child = useChildPlaylist(activeScheduleId, screenId);
   const qc = useQueryClient();
+  const clock = useServerClockStrict();
 
   // Prefetch logic: when we’re close to the next window, warm its playlist
   useEffect(() => {
     if (!next || !parent.data?.date) return;
 
-    const ms = timeToStartMs(next, parent.data.date, new Date());
+    // وقت البدء حسب ساعة السيرفر (ضمن نفس اليوم)
+    const rawMs = clock.msUntil(next.start_time);
+    if (rawMs == null) return;
+
     // Prefetch threshold (2 minutes before start; never negative)
     const THRESHOLD = 2 * 60_000;
-    const delay = Math.max(0, ms - THRESHOLD);
+    const delay = Math.max(0, rawMs - THRESHOLD);
 
     let timer: number | undefined;
     const arm = () => {
@@ -39,14 +39,14 @@ export function useTimedScheduleData() {
     if (delay === 0) {
       arm();
     } else {
-      timer = window.setTimeout(arm, delay);
+      timer = window.setTimeout(arm, delay) as unknown as number;
     }
 
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [next?.scheduleId, parent.data?.date, screenId, qc, next]);
-  
+  }, [next?.scheduleId, next?.start_time, parent.data?.date, screenId, qc, clock]);
+
   return {
     screenId,
     parent,
