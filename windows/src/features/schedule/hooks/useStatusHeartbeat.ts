@@ -33,7 +33,7 @@ export function useStatusHeartbeat() {
     sendStatus();
 
     // repeat every 85 seconds
-    intervalId = setInterval(sendStatus, 50 * 1000);
+    intervalId = setInterval(sendStatus, 80 * 1000);
 
     return () => clearInterval(intervalId);
   }, []);

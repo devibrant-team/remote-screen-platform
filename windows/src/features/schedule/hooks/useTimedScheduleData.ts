@@ -11,8 +11,8 @@ import { useServerClockStrict } from "../../../utils/useServerClockStrict";
 export const LS_SCREEN_ID = "screenId";
 
 // ⏱️ Prefetch thresholds (تقدر تعدّل من هون)
-const PREFETCH_NEXT_CHILD_MS = 10 * 60_000; // 10 دقائق قبل بداية الـ child القادم
-const PREFETCH_DEFAULT_BEFORE_END_MS = 10 * 60_000; // 10 دقائق قبل نهاية الـ window الحالية
+const PREFETCH_NEXT_CHILD_MS = 5 * 60_000; // 5 دقائق قبل بداية الـ child القادم
+const PREFETCH_DEFAULT_BEFORE_END_MS = 5 * 60_000; // 5 دقائق قبل نهاية الـ window الحالية
 
 export function useTimedScheduleData() {
   const screenId =
@@ -24,15 +24,15 @@ export function useTimedScheduleData() {
   const qc = useQueryClient();
   const clock = useServerClockStrict();
 
-  // Prefetch الـ child playlist للـ schedule القادم بالاعتماد على ساعة السيرفر
+  // Prefetch child للـ next schedule بناءً على ساعة السيرفر (HH:mm:ss)
   useEffect(() => {
     if (!next) return;
 
-    // كم باقي (ms) لبداية next.start_time حسب ساعة السيرفر
+    // ms لغاية بداية next.start_time
     const rawMs = clock.msUntil(next.start_time);
     if (rawMs == null) return;
 
-    // نبدأ prefetch قبل 5 دقائق
+    // بدنا نبلّش prefetch قبل prefetchMs من بداية الـ child
     const delay = Math.max(0, rawMs - PREFETCH_NEXT_CHILD_MS);
 
     let timer: number | undefined;
@@ -43,7 +43,7 @@ export function useTimedScheduleData() {
     if (delay === 0) {
       arm();
     } else {
-      timer = window.setTimeout(arm, delay) as unknown as number;
+      timer = window.setTimeout(arm, delay);
     }
 
     return () => {
@@ -51,7 +51,7 @@ export function useTimedScheduleData() {
     };
   }, [next?.scheduleId, next?.start_time, screenId, qc, clock]);
 
-  // Prefetch للـ DEFAULT playlist قبل نهاية الـ window الحالية (active) بالاعتماد على ساعة السيرفر
+  // Prefetch للـ DEFAULT playlist قبل نهاية window الحالية (active) حسب ساعة السيرفر
   useEffect(() => {
     if (!active || !screenId) return;
 
@@ -72,7 +72,7 @@ export function useTimedScheduleData() {
     if (delay === 0) {
       arm();
     } else {
-      timer = window.setTimeout(arm, delay) as unknown as number;
+      timer = window.setTimeout(arm, delay);
     }
 
     return () => {

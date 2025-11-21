@@ -89,10 +89,10 @@ export function useResolvedPlaylist(screenId?: string) {
       .catch(() => {});
   }, [activeScheduleId, screenId, qc]);
 
-  /* ── تأخيرات مبنية على ساعة السيرفر فقط ─────────────────── */
+  /* ── تأخيرات مبنية على ساعة السيرفر فقط (لـ prewarm/debug) ── */
   const activeEndDelayMs = useMemo(() => {
     const endTime = pickStr(active, "end_time"); // HH:mm:ss
-    return endTime ? clock.msUntil(endTime) : undefined; // قد تكون <= 0 عند الحافة
+    return endTime ? clock.msUntil(endTime) : undefined;
   }, [active, clock]);
 
   const nextStartDelayMs = useMemo(() => {
@@ -104,7 +104,7 @@ export function useResolvedPlaylist(screenId?: string) {
     return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
   }, [next]);
 
-  /* ── Decision logic مع احترام نافذة الـ schedule ─────────── */
+  /* ── Decision logic: نثق بالسيرفر/Reverb عند وجود schedule ── */
   const decision: Decision = useMemo(() => {
     const running = getNowPlaying() ?? null;
 
@@ -114,13 +114,11 @@ export function useResolvedPlaylist(screenId?: string) {
     const liveChild = child.data?.playlist;
     const liveDefault = defaultQ.data?.playlist;
 
-    // هل نحن داخل نافذة الـ schedule الحالية؟
-    const withinWindow =
-      activeScheduleId != null &&
-      (typeof activeEndDelayMs !== "number" || activeEndDelayMs > 0);
+    // وجود activeScheduleId يعني أن السيرفر قرر وجود schedule فعّال
+    const hasActiveSchedule = activeScheduleId != null;
 
     /* (A) لا يوجد schedule حالياً → نرجّح الـ Default دائماً */
-    if (!activeScheduleId) {
+    if (!hasActiveSchedule) {
       // 1) أحدث Default من السيرفر
       if (hasSlides(liveDefault)) {
         return {
@@ -157,95 +155,57 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    /* (B) يوجد schedule ونافذته ما زالت فعّالة (داخل الوقت) */
-    if (withinWindow) {
-      // أولوية: Child ضمن نافذته
-      if (hasSlides(liveChild)) {
-        return {
-          source: "child",
-          playlist: liveChild,
-          reason: "active window → live child",
-        };
-      }
-
-      // لو عندنا Child من الكاش (مرّ لفة كاملة سابقاً)
-      if (hasSlides(cachedChild?.playlist)) {
-        return {
-          source: "cache",
-          playlist: cachedChild!.playlist,
-          reason: "active window → cached child",
-        };
-      }
-
-      // كـ fallback ضمن نفس النافذة: Default (live ثم cached)
-      if (hasSlides(liveDefault)) {
-        return {
-          source: "default",
-          playlist: liveDefault,
-          reason: "active window → fallback default (live)",
-        };
-      }
-      if (hasSlides(cachedDefault?.playlist)) {
-        return {
-          source: "cache",
-          playlist: cachedDefault!.playlist,
-          reason: "active window → fallback default (cached)",
-        };
-      }
-
-      // آخر محاولة: لو في running playlist خلّيه
-      if (running && hasSlides(running.playlist)) {
-        return {
-          source: "cache",
-          playlist: running.playlist,
-          reason: "active window → keep running playlist",
-        };
-      }
-
+    /* (B) يوجد schedule (السيرفر هو اللي قرر) */
+    // أولوية: Child من السيرفر
+    if (hasSlides(liveChild)) {
       return {
-        source: "empty",
-        playlist: null,
-        reason: "active window → nothing available",
+        source: "child",
+        playlist: liveChild,
+        reason: "active schedule → live child",
       };
     }
 
-    /* (C) نافذة الـ schedule انتهت (activeEndDelayMs <= 0)  */
-    // هون حسب طلبك: لازم نرجع للـ Default مهما كان في Child أو كاش Child.
+    // ثم Child من الكاش (مرّت playlist لفة كاملة سابقاً)
+    if (hasSlides(cachedChild?.playlist)) {
+      return {
+        source: "cache",
+        playlist: cachedChild!.playlist,
+        reason: "active schedule → cached child",
+      };
+    }
+
+    // Fallback: Default (live ثم cached)
     if (hasSlides(liveDefault)) {
       return {
         source: "default",
         playlist: liveDefault,
-        reason: "window expired → live default",
+        reason: "active schedule → fallback default (live)",
       };
     }
-
     if (hasSlides(cachedDefault?.playlist)) {
       return {
         source: "cache",
         playlist: cachedDefault!.playlist,
-        reason: "window expired → cached default",
+        reason: "active schedule → fallback default (cached)",
       };
     }
 
-    // لو ما في Default أبداً، آخر خيار: لو في running default خليه، غير هيك نرجّع empty
-    if (
-      running &&
-      hasSlides(running.playlist) &&
-      running.source === "default"
-    ) {
+    // آخر محاولة: لو في running playlist خلّيه
+    if (running && hasSlides(running.playlist)) {
       return {
         source: "cache",
         playlist: running.playlist,
-        reason: "window expired → keep running default",
+        reason: "active schedule → keep running playlist",
       };
     }
 
+    // لا شيء متاح رغم وجود schedule
     return {
       source: "empty",
       playlist: null,
-      reason: "window expired → no default available",
+      reason: "active schedule → nothing available",
     };
-  }, [activeScheduleId, activeEndDelayMs, child.data?.playlist, defaultQ.data?.playlist]);
+  }, [activeScheduleId, child.data?.playlist, defaultQ.data?.playlist]);
 
   /* ── Prefetch نافذة مبكّرة من القرار الحالي ─────────────── */
   useEffect(() => {

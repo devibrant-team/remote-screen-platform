@@ -1,8 +1,8 @@
 {
-  "name": "windows",
+  "name": "iguana-screen-player",
   "private": true,
   "version": "0.0.0",
-  "description": "Windows Screen Iguana",
+  "description": "Windows Iguana Screen Player",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "author": {
@@ -60,9 +60,9 @@
     "wait-on": "^8.0.4"
   },
   "build": {
-    "appId": "com.devibrant.windows-iguana",
-    "productName": "Windows Screen Iguana",
-    "artifactName": "Windows-Screen-Iguana-Setup-${version}.${ext}",
+    "appId": "com.devibrant.iguana-screen-player",
+    "productName": "Iguana Screen Player",
+    "artifactName": "Iguana-Screen-Player-Setup-${version}.${ext}",
     "files": [
       "dist/**",
       "dist-electron/**",

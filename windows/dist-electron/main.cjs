@@ -44,26 +44,38 @@ const node_crypto_1 = require("node:crypto");
 const node_stream_1 = require("node:stream");
 const node_util_1 = require("node:util");
 const streamPipeline = (0, node_util_1.promisify)(node_stream_1.pipeline);
-const MEDIA_DIR = node_path_1.default.join(electron_1.app.getPath('userData'), 'media-cache');
-const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, 'index.json');
+const MEDIA_DIR = node_path_1.default.join(electron_1.app.getPath("userData"), "media-cache");
+const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, "index.json");
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
-function ensureDir() { if (!node_fs_1.default.existsSync(MEDIA_DIR))
-    node_fs_1.default.mkdirSync(MEDIA_DIR, { recursive: true }); }
-function loadIndex() { try {
-    return JSON.parse(node_fs_1.default.readFileSync(INDEX_FILE, 'utf8'));
+function ensureDir() {
+    if (!node_fs_1.default.existsSync(MEDIA_DIR))
+        node_fs_1.default.mkdirSync(MEDIA_DIR, { recursive: true });
 }
-catch {
-    return {};
-} }
-function saveIndex(ix) { node_fs_1.default.writeFileSync(INDEX_FILE, JSON.stringify(ix), 'utf8'); }
-function keyFor(url) { return (0, node_crypto_1.createHash)('sha1').update(url).digest('hex'); }
-function sizeOf(file) { try {
-    return node_fs_1.default.statSync(file).size;
+function loadIndex() {
+    try {
+        return JSON.parse(node_fs_1.default.readFileSync(INDEX_FILE, "utf8"));
+    }
+    catch {
+        return {};
+    }
 }
-catch {
-    return 0;
-} }
-function totalSize(ix) { return Object.values(ix).reduce((a, r) => a + (r.s || 0), 0); }
+function saveIndex(ix) {
+    node_fs_1.default.writeFileSync(INDEX_FILE, JSON.stringify(ix), "utf8");
+}
+function keyFor(url) {
+    return (0, node_crypto_1.createHash)("sha1").update(url).digest("hex");
+}
+function sizeOf(file) {
+    try {
+        return node_fs_1.default.statSync(file).size;
+    }
+    catch {
+        return 0;
+    }
+}
+function totalSize(ix) {
+    return Object.values(ix).reduce((a, r) => a + (r.s || 0), 0);
+}
 async function evictIfNeeded(ix) {
     let sz = totalSize(ix);
     if (sz <= MAX_BYTES)
@@ -88,7 +100,7 @@ async function downloadToFile(url, dst) {
     const file = node_fs_1.default.createWriteStream(dst);
     await streamPipeline(res.body, file);
 }
-electron_1.ipcMain.handle('media-cache:map', async (_evt, urls) => {
+electron_1.ipcMain.handle("media-cache:map", async (_evt, urls) => {
     ensureDir();
     const ix = loadIndex();
     const results = {};
@@ -97,16 +109,16 @@ electron_1.ipcMain.handle('media-cache:map', async (_evt, urls) => {
         const rec = ix[k];
         if (rec && node_fs_1.default.existsSync(rec.p)) {
             rec.t = Date.now();
-            results[url] = `file://${rec.p.replace(/\\/g, '/')}`;
+            results[url] = `file://${rec.p.replace(/\\/g, "/")}`;
             continue;
         }
-        const ext = node_path_1.default.extname(new URL(url).pathname) || '';
+        const ext = node_path_1.default.extname(new URL(url).pathname) || "";
         const dst = node_path_1.default.join(MEDIA_DIR, `${k}${ext}`);
         try {
             await downloadToFile(url, dst);
             const s = sizeOf(dst);
             ix[k] = { p: dst, s, t: Date.now() };
-            results[url] = `file://${dst.replace(/\\/g, '/')}`;
+            results[url] = `file://${dst.replace(/\\/g, "/")}`;
         }
         catch {
             results[url] = url; // fallback
@@ -119,7 +131,9 @@ electron_1.ipcMain.handle('media-cache:map', async (_evt, urls) => {
 async function getStore() {
     const mod = await Promise.resolve().then(() => __importStar(require("electron-store")));
     const Store = mod.default;
-    return new Store({ name: "device" });
+    return new Store({
+        name: "device",
+    });
 }
 let win = null;
 const isDev = !electron_1.app.isPackaged;
@@ -136,25 +150,30 @@ async function createWindow() {
     win = new electron_1.BrowserWindow({
         width: 1000,
         height: 700,
+        icon: node_path_1.default.join(process.cwd(), "src/assets/IgaunaIcon.ico"),
         webPreferences: {
             preload: node_path_1.default.join(__dirname, "preload.cjs"),
             contextIsolation: true,
-            nodeIntegration: false
-        }
+            nodeIntegration: false,
+        },
     });
     if (isDev && process.env.ELECTRON_START_URL) {
         await win.loadURL(process.env.ELECTRON_START_URL);
     }
     else {
-        await win.loadFile(node_path_1.default.join(electron_1.app.getAppPath(), 'dist', 'index.html'));
+        await win.loadFile(node_path_1.default.join(electron_1.app.getAppPath(), "dist", "index.html"));
     }
     win.on("closed", () => (win = null));
 }
 electron_1.app.whenReady().then(createWindow);
-electron_1.app.on("window-all-closed", () => { if (process.platform !== "darwin")
-    electron_1.app.quit(); });
-electron_1.app.on("activate", () => { if (electron_1.BrowserWindow.getAllWindows().length === 0)
-    createWindow(); });
+electron_1.app.on("window-all-closed", () => {
+    if (process.platform !== "darwin")
+        electron_1.app.quit();
+});
+electron_1.app.on("activate", () => {
+    if (electron_1.BrowserWindow.getAllWindows().length === 0)
+        createWindow();
+});
 electron_1.ipcMain.handle("signage:getDeviceState", async () => {
     const store = await getStore();
     const { code, screenId } = store.store;
