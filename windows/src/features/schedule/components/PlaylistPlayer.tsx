@@ -36,7 +36,6 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
   return new Promise<void>((resolve) => {
     let done = false;
 
-    // نعرّف المتغيّرات قبل الاستخدام عشان ما يصير TDZ
     let timeoutId: number | null = null;
     let cbId: number | null = null;
 
@@ -67,22 +66,18 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
     const onCanPlay = () => finish();
     const onPlaying = () => finish();
 
-    // لو ما في فيديو أصلاً خلّص مباشرة (cleanup آمن لأن timeoutId = null)
     if (!vid) {
       finish();
       return;
     }
 
-    // لو الفيديو جاهز أصلاً برضو خلّص مباشرة
     if (vid.readyState >= 2) {
       finish();
       return;
     }
 
-    // تايمر المهلة
     timeoutId = window.setTimeout(finish, timeoutMs);
 
-    // أدقّ طريقة إن متوفرة (requestVideoFrameCallback)
     const rVFC = (vid as any).requestVideoFrameCallback?.(
       () => finish()
     );
@@ -93,7 +88,6 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
   });
 }
 
-
 /** ينتظر أول فريم للفيديو الأساسي ضمن عنصر شريحة — يؤثر فقط على الـoverlay */
 async function waitForPrimaryVideoReady(
   container: HTMLElement | null,
@@ -101,9 +95,8 @@ async function waitForPrimaryVideoReady(
 ) {
   if (!container) return;
   const vid = container.querySelector("video") as HTMLVideoElement | null;
-  if (!vid) return; // الشريحة ما فيها فيديو
+  if (!vid) return;
   try {
-    // حاول التشغيل لضمان فك الـdecoder
     const p = vid.play();
     if (p?.catch) p.catch(() => {});
   } catch {}
@@ -145,14 +138,29 @@ export default function PlaylistPlayer({
 
   const [showOverlay, setShowOverlay] = useState(false);
 
+  // ⏱️ عدّ وقت الشريحة الحالية (بالثواني) — مبني فقط على duration
+  const [slideElapsed, setSlideElapsed] = useState(0);
+
+  // كلما تغيّرت الشريحة نعيد عدّ الوقت من الصفر
+  useEffect(() => {
+    const start = performance.now();
+    setSlideElapsed(0);
+
+    const id = window.setInterval(() => {
+      const now = performance.now();
+      setSlideElapsed((now - start) / 1000);
+    }, 100); // تحديث كل 100ms
+
+    return () => window.clearInterval(id);
+  }, [activeIndex]);
+
   // حُرّاس مبسّطين للفيديو (بدون أي تأثير على التايمر)
   function attachVideoGuards(videoEl: HTMLVideoElement) {
     const prev = videoGuardsCleanup.current.get(videoEl);
     if (prev) prev();
 
-    // هنا ممكن نضيف logging فقط – بدون skip أو تعديل للمدة
     const cleanup = () => {
-      // لا listeners حالياً
+      // ممكن تضيف logs لاحقًا
     };
 
     videoGuardsCleanup.current.set(videoEl, cleanup);
@@ -221,7 +229,7 @@ export default function PlaylistPlayer({
       if (Number(sid) !== slide.id) list.forEach((v) => v.pause());
     });
 
-    // شغّل فيديوهات الشريحة الحالية (إن وجدت)
+    // شغّل فيديوهات الشريحة الحالية (للعرض فقط)
     const vids = videoRefs.current[slide.id] || [];
     vids.forEach((v) => {
       try {
@@ -236,7 +244,7 @@ export default function PlaylistPlayer({
       } catch {}
     });
 
-    // ✅ من هنا فصاعداً: التبديل إلى الشريحة التالية مبني فقط على مدة الشريحة
+    // ✅ التبديل للشرائح مبني فقط على slide.duration
     const hasDuration =
       Number.isFinite(slide.duration) && (slide.duration as number) > 0;
     if (!hasDuration) {
@@ -246,7 +254,7 @@ export default function PlaylistPlayer({
 
     const durationMs = (slide.duration as number) * 1000;
 
-    // ⏱️ هذا التايمر لا يعتمد على الفيديو أبداً — حتى لو الفيديو وقف / عمل pause / error
+    // ⏱️ لا علاقة للفيديو / buffering / pause بهذا التايمر
     const t = window.setTimeout(next, durationMs);
 
     return () => {
@@ -365,12 +373,15 @@ export default function PlaylistPlayer({
 
   return (
     <div className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
-      {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
+      {/* Debug Panel: يعرض وقت السيرفر + مدة الشريحة + كم مرق */}
       <PlaylistDebugPanel
         slides={slides as PlaylistSlide[]}
         activeIndex={activeIndex}
         scheduleId={scheduleId}
+        slideElapsed={slideElapsed}
       />
+
+      {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
       <div
         className={`pointer-events-none absolute inset-0 bg-black transition-opacity duration-150 ${
           showOverlay ? "opacity-30" : "opacity-0"
@@ -380,7 +391,7 @@ export default function PlaylistPlayer({
       <Swiper
         modules={[EffectFade]}
         effect="fade"
-        fadeEffect={{ crossFade: true }} // ✅ تراكب حقيقي بدون فجوة سوداء
+        fadeEffect={{ crossFade: true }}
         speed={320}
         onSwiper={(sw) => {
           swiperRef.current = sw;
@@ -411,7 +422,6 @@ export default function PlaylistPlayer({
             await new Promise((r) => setTimeout(r, 120));
           }
 
-          // بعد ما نجهّز الهدف نوقف باقي الفيديوهات
           Object.entries(videoRefs.current).forEach(([sid, list]) => {
             if (Number(sid) !== targetSlide?.id)
               list.forEach((v) => {
