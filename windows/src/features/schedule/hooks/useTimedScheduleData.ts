@@ -10,9 +10,22 @@ import { useServerClockStrict } from "../../../utils/useServerClockStrict";
 
 export const LS_SCREEN_ID = "screenId";
 
-// ⏱️ Prefetch thresholds (تقدر تعدّل من هون)
+// ⏱️ Prefetch thresholds
 const PREFETCH_NEXT_CHILD_MS = 5 * 60_000; // 5 دقائق قبل بداية الـ child القادم
 const PREFETCH_DEFAULT_BEFORE_END_MS = 5 * 60_000; // 5 دقائق قبل نهاية الـ window الحالية
+
+// نفس فكرة msUntilSmart عشان ما نضيع prefetch لو في انحراف صغير
+function msUntilSmart(
+  clock: ReturnType<typeof useServerClockStrict>,
+  hms?: string | null
+): number | null {
+  if (!hms) return null;
+  const raw = clock.msUntil(hms);
+  if (raw == null) return null;
+  // لو الفرق سلبي بسيط (مثلاً -100ms) نعتبرها 0
+  if (raw < 0 && raw > -300) return 0;
+  return raw;
+}
 
 export function useTimedScheduleData() {
   const screenId =
@@ -24,15 +37,14 @@ export function useTimedScheduleData() {
   const qc = useQueryClient();
   const clock = useServerClockStrict();
 
-  // Prefetch child للـ next schedule بناءً على ساعة السيرفر (HH:mm:ss)
+  // ⏭️ Prefetch child للـ next schedule بناءً على ساعة السيرفر (HH:mm:ss)
   useEffect(() => {
     if (!next) return;
 
-    // ms لغاية بداية next.start_time
-    const rawMs = clock.msUntil(next.start_time);
+    const rawMs = msUntilSmart(clock, next.start_time);
     if (rawMs == null) return;
 
-    // بدنا نبلّش prefetch قبل prefetchMs من بداية الـ child
+    // نبلّش prefetch قبل 5 دقائق من بداية الـ child
     const delay = Math.max(0, rawMs - PREFETCH_NEXT_CHILD_MS);
 
     let timer: number | undefined;
@@ -51,11 +63,11 @@ export function useTimedScheduleData() {
     };
   }, [next?.scheduleId, next?.start_time, screenId, qc, clock]);
 
-  // Prefetch للـ DEFAULT playlist قبل نهاية window الحالية (active) حسب ساعة السيرفر
+  // 🅾️ Prefetch للـ DEFAULT playlist قبل نهاية الـ window الحالية حسب ساعة السيرفر
   useEffect(() => {
     if (!active || !screenId) return;
 
-    const rawMs = clock.msUntil(active.end_time);
+    const rawMs = msUntilSmart(clock, active.end_time);
     if (rawMs == null) return;
 
     const delay = Math.max(0, rawMs - PREFETCH_DEFAULT_BEFORE_END_MS);

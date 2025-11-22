@@ -29,14 +29,14 @@ function secsToHHMMSS(s: number) {
   )}:${String(ss).padStart(2, "0")}`;
 }
 
-// ✅ فورمات مع ميلي ثانية: HH:MM:SS.mmm
+// ✅ HH:MM:SS.mmm
 function secsToHHMMSSmmm(s: number) {
   s = clampDay(s);
   const totalInt = Math.floor(s);
   const hh = Math.floor(totalInt / 3600);
   const mm = Math.floor((totalInt % 3600) / 60);
   const ss = Math.floor(totalInt % 60);
-  const ms = Math.floor((s - totalInt) * 1000); // 0..999
+  const ms = Math.floor((s - totalInt) * 1000);
 
   return (
     `${String(hh).padStart(2, "0")}:` +
@@ -46,26 +46,24 @@ function secsToHHMMSSmmm(s: number) {
   );
 }
 
-// عدّ الميديا داخل الشريحة (متوافق مع slots المستخدمين حالياً)
+// عدّ الميديا داخل الشريحة
 function countMediaInSlide(slide?: PlaylistSlide | null): number {
   if (!slide) return 0;
   const anySlide = slide as any;
 
-  // 🔹 لو عندك media[] في بعض الـ layouts
   if (Array.isArray(anySlide.media)) {
     return anySlide.media.length;
   }
 
-  // 🔹 الشكل الحقيقي عندك: slots مع ImageFile + mediaType
   if (Array.isArray(anySlide.slots)) {
     return anySlide.slots.filter((slot: any) => {
       const type = String(slot?.mediaType || "").toLowerCase();
-      const hasUrl = !!slot?.ImageFile || !!slot?.image_url || !!slot?.video_url;
+      const hasUrl =
+        !!slot?.ImageFile || !!slot?.image_url || !!slot?.video_url;
       return type === "image" || type === "video" || hasUrl;
     }).length;
   }
 
-  // 🔹 دعم إضافي لو استعملت zones/widgets في future layouts
   if (Array.isArray(anySlide.zones)) {
     return anySlide.zones.filter(
       (z: any) =>
@@ -98,10 +96,16 @@ const PlaylistDebugPanel: React.FC<Props> = ({
 }) => {
   const clock = useServerClockStrict();
 
-  const [serverTime, setServerTime] = useState<string>("--:--:--.---");
-  const [serverSecsRaw, setServerSecsRaw] = useState<string>("0.000");
-  const [driftSec, setDriftSec] = useState<number>(0);
-  const [tz, setTz] = useState<string | null>(null);
+  // 🧠 نقرأ قيم البداية فوراً من الـ clock
+  const initialSecs = clock.nowSecs();
+  const [serverTime, setServerTime] = useState<string>(() =>
+    secsToHHMMSSmmm(initialSecs)
+  );
+  const [serverSecsRaw, setServerSecsRaw] = useState<string>(() =>
+    initialSecs.toFixed(3)
+  );
+  const [driftSec, setDriftSec] = useState<number>(() => clock.driftSec());
+  const [tz, setTz] = useState<string | null>(() => clock.timezone());
   const [isCached, setIsCached] = useState<boolean | null>(null);
 
   const slide = slides[activeIndex] ?? null;
@@ -109,20 +113,21 @@ const PlaylistDebugPanel: React.FC<Props> = ({
 
   const mediaCount = useMemo(() => countMediaInSlide(slide), [slide]);
 
-  // تحديث وقت السيرفر كل ثانية وقراءة drift + timezone + ms
+  // ⏱️ تحديث وقت السيرفر كل ثانية — نربطه مرّة واحدة فقط
   useEffect(() => {
     const id = window.setInterval(() => {
-      const secs = clock.nowSecs(); // يحتوي جزء عشري = ms/1000
-      setServerTime(secsToHHMMSSmmm(secs)); // HH:MM:SS.mmm
-      setServerSecsRaw(secs.toFixed(3)); // ثواني اليوم مع 3 أرقام بعد الفاصلة
+      const secs = clock.nowSecs();
+      setServerTime(secsToHHMMSSmmm(secs));
+      setServerSecsRaw(secs.toFixed(3));
       setDriftSec(clock.driftSec());
       setTz(clock.timezone());
     }, 1000);
 
     return () => window.clearInterval(id);
-  }, [clock]);
+    // ما نحط clock بالـ deps عشان ما ينعاد الـ effect
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // هل يوجد Playlist محفوظ في الكاش (Child أو Default)
+  // 👇 فحص الكاش مرّة واحدة (أو لما scheduleId يتغيّر)
   useEffect(() => {
     try {
       const cachedChild = loadLastGoodChild();
@@ -143,7 +148,7 @@ const PlaylistDebugPanel: React.FC<Props> = ({
     } catch {
       setIsCached(null);
     }
-  }, [slides, activeIndex]);
+  }, [scheduleId]);
 
   return (
     <div className="pointer-events-none absolute top-3 right-3 z-50">
@@ -152,13 +157,11 @@ const PlaylistDebugPanel: React.FC<Props> = ({
           Debug · Playlist
         </div>
 
-        {/* وقت السيرفر مع ms */}
         <div className="flex justify-between gap-3">
           <span className="text-white/60">Server time</span>
           <span className="font-mono">{serverTime}</span>
         </div>
 
-        {/* القيمة الخام بالثواني مع 3 أرقام (للمقارنة بين الشاشات) */}
         <div className="flex justify-between gap-3">
           <span className="text-white/60">Server secs</span>
           <span className="font-mono">{serverSecsRaw}</span>
@@ -167,7 +170,7 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         <div className="flex justify-between gap-3">
           <span className="text-white/60">Timezone</span>
           <span className="font-mono">
-            {tz ?? <span className="text-white/40">unknown</span>}
+            {tz ?? <span className="text-white/40">…</span>}
           </span>
         </div>
 

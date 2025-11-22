@@ -35,6 +35,27 @@ type Props = {
 function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
   return new Promise<void>((resolve) => {
     let done = false;
+
+    // نعرّف المتغيّرات قبل الاستخدام عشان ما يصير TDZ
+    let timeoutId: number | null = null;
+    let cbId: number | null = null;
+
+    function cleanup() {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (vid) {
+        vid.removeEventListener("canplay", onCanPlay);
+        vid.removeEventListener("playing", onPlaying);
+      }
+      if (cbId != null && (vid as any).cancelVideoFrameCallback) {
+        try {
+          (vid as any).cancelVideoFrameCallback(cbId);
+        } catch {}
+      }
+    }
+
     const finish = () => {
       if (!done) {
         done = true;
@@ -43,34 +64,35 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
       }
     };
 
-    if (!vid) return finish();
-    if (vid.readyState >= 2) return finish();
-
-    const t = setTimeout(finish, timeoutMs);
-
     const onCanPlay = () => finish();
     const onPlaying = () => finish();
 
-    // أدقّ طريقة إن متوفرة
-    let cbId: number | null = null;
-    const rVFC = (vid as any).requestVideoFrameCallback?.(() => finish());
-    cbId = (typeof rVFC === "number" ? rVFC : null) as number | null;
-
-    function cleanup() {
-      clearTimeout(t);
-      vid.removeEventListener("canplay", onCanPlay);
-      vid.removeEventListener("playing", onPlaying);
-      if (cbId && (vid as any).cancelVideoFrameCallback) {
-        try {
-          (vid as any).cancelVideoFrameCallback(cbId);
-        } catch {}
-      }
+    // لو ما في فيديو أصلاً خلّص مباشرة (cleanup آمن لأن timeoutId = null)
+    if (!vid) {
+      finish();
+      return;
     }
+
+    // لو الفيديو جاهز أصلاً برضو خلّص مباشرة
+    if (vid.readyState >= 2) {
+      finish();
+      return;
+    }
+
+    // تايمر المهلة
+    timeoutId = window.setTimeout(finish, timeoutMs);
+
+    // أدقّ طريقة إن متوفرة (requestVideoFrameCallback)
+    const rVFC = (vid as any).requestVideoFrameCallback?.(
+      () => finish()
+    );
+    cbId = (typeof rVFC === "number" ? rVFC : null) as number | null;
 
     vid.addEventListener("canplay", onCanPlay, { once: true });
     vid.addEventListener("playing", onPlaying, { once: true });
   });
 }
+
 
 /** ينتظر أول فريم للفيديو الأساسي ضمن عنصر شريحة — يؤثر فقط على الـoverlay */
 async function waitForPrimaryVideoReady(

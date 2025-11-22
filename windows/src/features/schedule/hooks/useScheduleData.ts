@@ -4,32 +4,26 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTimedSchedule } from "./useTimedSchedule";
 import { useChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
 import { prefetchNextPlaylist } from "../../../ReactQuery/schedule/prefetchNextPlaylist";
-import type { ParentScheduleItem } from "../../../types/schedule";
 import { qk } from "../../../ReactQuery/queryKeys";
 import { fetchDefaultPlaylist } from "../../../ReactQuery/schedule/useDefaultPlaylist";
+import { useServerClockStrict } from "../../../utils/useServerClockStrict";
 
 export const LS_SCREEN_ID = "screenId";
 
-// ⏱️ Prefetch thresholds (tweak here: 3 or 5 minutes)
-const PREFETCH_NEXT_CHILD_MS = 5 * 60_000; // 5 min before next schedule starts
-const PREFETCH_DEFAULT_BEFORE_END_MS = 5 * 60_000; // 5 min before current window ends
+// ⏱️ Prefetch thresholds
+const PREFETCH_NEXT_CHILD_MS = 5 * 60_000; // 5 دقائق قبل بداية الـ child القادم
+const PREFETCH_DEFAULT_BEFORE_END_MS = 5 * 60_000; // 5 دقائق قبل نهاية الـ window الحالية
 
-function timeToStartMs(
-  item: ParentScheduleItem,
-  dayDate: string,
-  now = new Date()
-) {
-  const t = new Date(`${dayDate}T${item.start_time}`).getTime();
-  return t - now.getTime();
-}
-
-function timeToEndMs(
-  item: ParentScheduleItem,
-  dayDate: string,
-  now = new Date()
-) {
-  const t = new Date(`${dayDate}T${item.end_time}`).getTime();
-  return t - now.getTime();
+// نفس فكرة msUntilSmart عشان ما نضيع prefetch لو في انحراف صغير
+function msUntilSmart(
+  clock: ReturnType<typeof useServerClockStrict>,
+  hms?: string | null
+): number | null {
+  if (!hms) return null;
+  const raw = clock.msUntil(hms);
+  if (raw == null) return null;
+  if (raw < 0 && raw > -300) return 0;
+  return raw;
 }
 
 export function useTimedScheduleData() {
@@ -40,13 +34,17 @@ export function useTimedScheduleData() {
   const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
   const child = useChildPlaylist(activeScheduleId, screenId);
   const qc = useQueryClient();
+  const clock = useServerClockStrict();
 
-  // Prefetch the NEXT schedule's child playlist ahead of time (5 minutes)
+  // ⏭️ Prefetch child للـ next schedule بناءً على ساعة السيرفر (HH:mm:ss)
   useEffect(() => {
-    if (!next || !parent.data?.date) return;
+    if (!next) return;
 
-    const ms = timeToStartMs(next, parent.data.date, new Date());
-    const delay = Math.max(0, ms - PREFETCH_NEXT_CHILD_MS);
+    const rawMs = msUntilSmart(clock, next.start_time);
+    if (rawMs == null) return;
+
+    // نبلّش prefetch قبل 5 دقائق من بداية الـ child
+    const delay = Math.max(0, rawMs - PREFETCH_NEXT_CHILD_MS);
 
     let timer: number | undefined;
     const arm = () => {
@@ -62,15 +60,16 @@ export function useTimedScheduleData() {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [next?.scheduleId, parent.data?.date, screenId, qc, next]);
+  }, [next?.scheduleId, next?.start_time, screenId, qc, clock]);
 
-  // Prefetch the DEFAULT playlist shortly before the current window ends (5 minutes).
-  // This ensures when we hit a gap, default is ready and shows instantly.
+  // 🅾️ Prefetch للـ DEFAULT playlist قبل نهاية الـ window الحالية حسب ساعة السيرفر
   useEffect(() => {
-    if (!active || !parent.data?.date || !screenId) return;
+    if (!active || !screenId) return;
 
-    const ms = timeToEndMs(active, parent.data.date, new Date());
-    const delay = Math.max(0, ms - PREFETCH_DEFAULT_BEFORE_END_MS);
+    const rawMs = msUntilSmart(clock, active.end_time);
+    if (rawMs == null) return;
+
+    const delay = Math.max(0, rawMs - PREFETCH_DEFAULT_BEFORE_END_MS);
 
     let timer: number | undefined;
     const arm = () => {
@@ -90,7 +89,7 @@ export function useTimedScheduleData() {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [active?.scheduleId, parent.data?.date, screenId, qc, active]);
+  }, [active?.scheduleId, active?.end_time, screenId, qc, clock]);
 
   return {
     screenId,

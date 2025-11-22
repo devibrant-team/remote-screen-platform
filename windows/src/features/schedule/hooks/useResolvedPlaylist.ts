@@ -1,7 +1,6 @@
 // src/features/schedule/hooks/useResolvedPlaylist.ts
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useTimedSchedule } from "./useTimedSchedule";
 import {
   useChildPlaylist,
   fetchChildPlaylist,
@@ -11,7 +10,6 @@ import {
   fetchDefaultPlaylist,
 } from "../../../ReactQuery/schedule/useDefaultPlaylist";
 import {
-  // ما عاد نستخدم saveLastGoodChild هون – الحارس موجود في HomeScreen loop
   saveLastGoodDefault,
   loadLastGoodChild,
   loadLastGoodDefault,
@@ -20,6 +18,11 @@ import {
 import { prefetchWindow } from "../../../utils/mediaPrefetcher";
 import { qk } from "../../../ReactQuery/queryKeys";
 import { useServerClockStrict } from "../../../utils/useServerClockStrict";
+import { resolveActiveAndNext } from "../../../utils/scheduleTime";
+import {
+  useParentSchedules,
+  pickScheduleId,
+} from "../../../ReactQuery/schedule/useParentSchedules";
 
 type Decision =
   | { source: "child"; playlist: any; reason: string }
@@ -27,14 +30,18 @@ type Decision =
   | { source: "cache"; playlist: any; reason: string }
   | { source: "empty"; playlist: null; reason: string };
 
-const hasSlides = (pl?: any) => Array.isArray(pl?.slides) && pl.slides.length > 0;
+const hasSlides = (pl?: any) =>
+  Array.isArray(pl?.slides) && pl.slides.length > 0;
 
 /* ---------- Safe access helpers ---------- */
 function pickStr(obj: unknown, key: string): string | undefined {
   const v = (obj as any)?.[key];
   return typeof v === "string" ? v : undefined;
 }
-function pickFirstDefined<T = any>(obj: unknown, keys: string[]): T | undefined {
+function pickFirstDefined<T = any>(
+  obj: unknown,
+  keys: string[]
+): T | undefined {
   for (const k of keys) {
     const v = (obj as any)?.[k];
     if (v !== undefined && v !== null) return v as T;
@@ -45,18 +52,58 @@ function pickFirstDefined<T = any>(obj: unknown, keys: string[]): T | undefined 
 export function useResolvedPlaylist(screenId?: string) {
   const qc = useQueryClient();
   const clock = useServerClockStrict();
-  const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
+
+  // 🧠 نجيب parent schedules مباشرة
+  const parent = useParentSchedules(screenId);
+
+  const day = parent.data?.date;
+  const items = parent.data?.data ?? [];
+
+  // ⏱️ tick محلي كل ثانية عشان نعيد حساب الـ active حسب ساعة السيرفر
+  const [timeTick, setTimeTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTimeTick((t) => t + 1);
+    }, 1000); // كل ثانية
+    return () => clearInterval(id);
+  }, []);
+
+  // ثواني اليوم من ساعة السيرفر
+  const nowSec = clock.nowSecs();
+
+  // نحسب active + next بناءً على الوقت الحالي
+  const { active, next } = useMemo(() => {
+    if (!day || items.length === 0) {
+      return {
+        active: undefined,
+        next: null,
+      };
+    }
+    const res = resolveActiveAndNext(items, nowSec);
+
+    // Debug optional:
+    // console.log("[SCHEDULE_DEBUG] useResolvedPlaylist", {
+    //   day,
+    //   nowSec,
+    //   activeId: pickScheduleId(res.active),
+    //   nextId: pickScheduleId(res.next),
+    // });
+
+    return res;
+  }, [day, items, nowSec, timeTick]); // 👈 timeTick يخليها تعيد الحساب كل ثانية
+
+  const activeScheduleId = pickScheduleId(active) ?? undefined;
 
   /* ── Live queries ─────────────────────────────────────────── */
   const child = useChildPlaylist(activeScheduleId, screenId);
 
-  // نفعل استعلام الـDefault فقط عند الحاجة (لا يوجد child صالح أو لا يوجد schedule)
+  // نقرر default بناءً على حالة الـ active + child
   const wantDefault =
-    !activeScheduleId || child.isError || !hasSlides(child.data?.playlist);
+    !active || child.isError || !hasSlides(child.data?.playlist);
 
   const defaultQ = useDefaultPlaylist(screenId, wantDefault as any);
 
-  /* ── Persist آخر نسخة ناجحة للـ Default فقط ─────────────── */
+  /* ── Persist آخر نسخة ناجحة للـ Default ─────────────── */
   useEffect(() => {
     if (hasSlides(defaultQ.data?.playlist)) {
       saveLastGoodDefault(defaultQ.data!.playlist);
@@ -66,7 +113,7 @@ export function useResolvedPlaylist(screenId?: string) {
   /* ── Prefetch default أثناء الفجوات ───────────────────────── */
   useEffect(() => {
     if (!screenId) return;
-    if (!activeScheduleId) {
+    if (!active) {
       qc
         .prefetchQuery({
           queryKey: qk.def(screenId),
@@ -75,7 +122,7 @@ export function useResolvedPlaylist(screenId?: string) {
         })
         .catch(() => {});
     }
-  }, [screenId, activeScheduleId, qc]);
+  }, [screenId, active, qc]);
 
   /* ── Prefetch child عند تغيّر الـschedule الفعّال ─────────── */
   useEffect(() => {
@@ -91,12 +138,12 @@ export function useResolvedPlaylist(screenId?: string) {
 
   /* ── تأخيرات مبنية على ساعة السيرفر فقط (لـ prewarm/debug) ── */
   const activeEndDelayMs = useMemo(() => {
-    const endTime = pickStr(active, "end_time"); // HH:mm:ss
+    const endTime = pickStr(active, "end_time");
     return endTime ? clock.msUntil(endTime) : undefined;
   }, [active, clock]);
 
   const nextStartDelayMs = useMemo(() => {
-    const startTime = pickStr(next, "start_time"); // HH:mm:ss
+    const startTime = pickStr(next, "start_time");
     return startTime ? clock.msUntil(startTime) : undefined;
   }, [next, clock]);
 
@@ -104,7 +151,7 @@ export function useResolvedPlaylist(screenId?: string) {
     return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
   }, [next]);
 
-  /* ── Decision logic: نثق بالسيرفر/Reverb عند وجود schedule ── */
+  /* ── Decision logic: Child vs Default ────────────────────── */
   const decision: Decision = useMemo(() => {
     const running = getNowPlaying() ?? null;
 
@@ -114,12 +161,19 @@ export function useResolvedPlaylist(screenId?: string) {
     const liveChild = child.data?.playlist;
     const liveDefault = defaultQ.data?.playlist;
 
-    // وجود activeScheduleId يعني أن السيرفر قرر وجود schedule فعّال
-    const hasActiveSchedule = activeScheduleId != null;
+    const hasActiveSchedule = !!active;
 
-    /* (A) لا يوجد schedule حالياً → نرجّح الـ Default دائماً */
+    // Debug decision:
+    // console.log("[DECISION_DEBUG]", {
+    //   nowSec,
+    //   hasActiveSchedule,
+    //   activeId: pickScheduleId(active),
+    //   hasChildSlides: hasSlides(liveChild),
+    //   hasDefaultSlides: hasSlides(liveDefault),
+    // });
+
+    // (A) ما في schedule حاليًا → default
     if (!hasActiveSchedule) {
-      // 1) أحدث Default من السيرفر
       if (hasSlides(liveDefault)) {
         return {
           source: "default",
@@ -127,7 +181,6 @@ export function useResolvedPlaylist(screenId?: string) {
           reason: "no schedule → fresh default",
         };
       }
-      // 2) Default من الكاش
       if (hasSlides(cachedDefault?.playlist)) {
         return {
           source: "cache",
@@ -135,7 +188,6 @@ export function useResolvedPlaylist(screenId?: string) {
           reason: "no schedule → cached default",
         };
       }
-      // 3) لو الـrunning الحالي كان Default، خليه (ريفريش أو رجوع من أوفلاين)
       if (
         running &&
         hasSlides(running.playlist) &&
@@ -147,7 +199,6 @@ export function useResolvedPlaylist(screenId?: string) {
           reason: "no schedule → keep running default",
         };
       }
-      // 4) لا شيء
       return {
         source: "empty",
         playlist: null,
@@ -155,8 +206,7 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    /* (B) يوجد schedule (السيرفر هو اللي قرر) */
-    // أولوية: Child من السيرفر
+    // (B) في schedule فعّال
     if (hasSlides(liveChild)) {
       return {
         source: "child",
@@ -165,7 +215,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // ثم Child من الكاش (مرّت playlist لفة كاملة سابقاً)
     if (hasSlides(cachedChild?.playlist)) {
       return {
         source: "cache",
@@ -174,7 +223,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // Fallback: Default (live ثم cached)
     if (hasSlides(liveDefault)) {
       return {
         source: "default",
@@ -190,7 +238,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // آخر محاولة: لو في running playlist خلّيه
     if (running && hasSlides(running.playlist)) {
       return {
         source: "cache",
@@ -199,13 +246,18 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // لا شيء متاح رغم وجود schedule
     return {
       source: "empty",
       playlist: null,
       reason: "active schedule → nothing available",
     };
-  }, [activeScheduleId, child.data?.playlist, defaultQ.data?.playlist]);
+  }, [
+    active,
+    child.data?.playlist,
+    defaultQ.data?.playlist,
+    nowSec,
+  ]);
+
 
   /* ── Prefetch نافذة مبكّرة من القرار الحالي ─────────────── */
   useEffect(() => {
@@ -215,7 +267,9 @@ export function useResolvedPlaylist(screenId?: string) {
   }, [decision.playlist]);
 
   /* ── Quiet refresh helper ────────────────────────────────── */
-  const quietRefreshAll = async (overrideScheduleId?: number | string | null) => {
+  const quietRefreshAll = async (
+    overrideScheduleId?: number | string | null
+  ) => {
     const sid = overrideScheduleId ?? activeScheduleId ?? undefined;
     const parentKey = qk.parent(screenId);
     const childKey = sid != null ? qk.child(sid, screenId) : null;
@@ -232,7 +286,7 @@ export function useResolvedPlaylist(screenId?: string) {
     await qc.refetchQueries({ queryKey: defaultKey, type: "active" });
   };
 
-  // isLoading ما لازم يطفي الشاشة إذا معنا Playlist جاهزة للعرض
+  // isLoading ما لازم يطفي الشاشة إذا معنا Playlist جاهزة
   const anyLoading = parent.isLoading || child.isLoading || defaultQ.isLoading;
   const isLoadingSafe = anyLoading && !hasSlides(decision.playlist);
 

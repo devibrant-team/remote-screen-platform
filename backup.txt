@@ -1,792 +1,651 @@
-import "swiper/css";
-import "swiper/css/effect-fade";
-
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// src/features/schedule/hooks/useTimedScheduleData.ts
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import SmartPlayer from "../features/schedule/components/SmartPlayer";
-import { useScreenId } from "../features/schedule/hooks/useScreenId";
-import { echo, ReverbConnection } from "../echo";
-import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlaylist";
+import { useTimedSchedule } from "./useTimedSchedule";
+import { useChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
+import { prefetchNextPlaylist } from "../../../ReactQuery/schedule/prefetchNextPlaylist";
+import { qk } from "../../../ReactQuery/queryKeys";
+import { fetchDefaultPlaylist } from "../../../ReactQuery/schedule/useDefaultPlaylist";
+import { useServerClockStrict } from "../../../utils/useServerClockStrict";
+
+export const LS_SCREEN_ID = "screenId";
+
+// ⏱️ Prefetch thresholds (تقدر تعدّل من هون)
+const PREFETCH_NEXT_CHILD_MS = 5 * 60_000; // 5 دقائق قبل بداية الـ child القادم
+const PREFETCH_DEFAULT_BEFORE_END_MS = 5 * 60_000; // 5 دقائق قبل نهاية الـ window الحالية
+
+export function useTimedScheduleData() {
+  const screenId =
+    (typeof window !== "undefined" && localStorage.getItem(LS_SCREEN_ID)) ||
+    undefined;
+
+  const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
+  const child = useChildPlaylist(activeScheduleId, screenId);
+  const qc = useQueryClient();
+  const clock = useServerClockStrict();
+
+  // Prefetch child للـ next schedule بناءً على ساعة السيرفر (HH:mm:ss)
+  useEffect(() => {
+    if (!next) return;
+
+    // ms لغاية بداية next.start_time
+    const rawMs = clock.msUntil(next.start_time);
+    if (rawMs == null) return;
+
+    // بدنا نبلّش prefetch قبل prefetchMs من بداية الـ child
+    const delay = Math.max(0, rawMs - PREFETCH_NEXT_CHILD_MS);
+
+    let timer: number | undefined;
+    const arm = () => {
+      prefetchNextPlaylist(qc, next.scheduleId, screenId).catch(() => {});
+    };
+
+    if (delay === 0) {
+      arm();
+    } else {
+      timer = window.setTimeout(arm, delay);
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [next?.scheduleId, next?.start_time, screenId, qc, clock]);
+
+  // Prefetch للـ DEFAULT playlist قبل نهاية window الحالية (active) حسب ساعة السيرفر
+  useEffect(() => {
+    if (!active || !screenId) return;
+
+    const rawMs = clock.msUntil(active.end_time);
+    if (rawMs == null) return;
+
+    const delay = Math.max(0, rawMs - PREFETCH_DEFAULT_BEFORE_END_MS);
+
+    let timer: number | undefined;
+    const arm = () => {
+      qc.prefetchQuery({
+        queryKey: qk.def(screenId),
+        queryFn: () => fetchDefaultPlaylist(screenId),
+        staleTime: 5 * 60_000,
+      }).catch(() => {});
+    };
+
+    if (delay === 0) {
+      arm();
+    } else {
+      timer = window.setTimeout(arm, delay);
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [active?.scheduleId, active?.end_time, screenId, qc, clock]);
+
+  return {
+    screenId,
+    parent,
+    activeScheduleId,
+    active,
+    next,
+    child,
+    isLoading: parent.isLoading || child.isLoading,
+    isError: parent.isError || child.isError,
+  };
+}  // src/features/schedule/hooks/useTimedSchedule.ts
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParentSchedules } from "../../../ReactQuery/schedule/useParentSchedules";
+import type { ParentScheduleItem } from "../../../types/schedule";
+import { pickScheduleId } from "../../../ReactQuery/schedule/useParentSchedules";
+import { useServerClockStrict } from "../../../utils/useServerClockStrict";
 import {
-  setNowPlaying,
-  loadLastGoodDefault,
-  loadLastGoodChild,
-  saveLastGoodChild,
-  getNowPlaying,
-} from "../utils/playlistCache";
-import { hashPlaylist } from "../utils/playlistHash";
-import {
-  prefetchSlideMedia,
-  prefetchWindow,
-  prefetchWholePlaylist,
-  setAdaptiveVideoWarmRange,
-} from "../utils/mediaPrefetcher";
-import type { ChildPlaylistResponse } from "../types/schedule";
-import { currentNetMode, type NetMode } from "../utils/netHealth";
+  resolveActiveAndNext,
+  isInactiveSchedule,   // ✅ import helper
+} from "../../../utils/scheduleTime";
 
-type PlaylistT = ChildPlaylistResponse["playlist"];
-type ScheduleUpdatePayload = { scheduleId?: number | string } & Record<
-  string,
-  unknown
->;
+/** حساب ms حتى أول boundary (start أو end) باستخدام ساعة السيرفر */
+function nextBoundaryDelayMsServer(
+  items: ParentScheduleItem[],
+  clock: ReturnType<typeof useServerClockStrict>
+): number | null {
+  if (!items.length) return null;
 
-const hasSlides = (pl?: PlaylistT | null): pl is PlaylistT =>
-  !!pl && Array.isArray(pl.slides) && pl.slides.length > 0;
+  const candidates: number[] = [];
 
-function classNames(...xs: Array<string | false | null | undefined>) {
-  return xs.filter(Boolean).join(" ");
+  for (const it of items) {
+    if (isInactiveSchedule((it as any).status)) continue; // ✅ تجاهل inactive فعلاً
+
+    const startMs = clock.msUntil(it.start_time);
+    if (startMs != null && startMs > 0) candidates.push(startMs);
+
+    const endMs = clock.msUntil(it.end_time);
+    if (endMs != null && endMs > 0) candidates.push(endMs);
+  }
+
+  if (!candidates.length) return null;
+  return Math.min(...candidates); // أقرب boundary
 }
 
-/* ========== Debug Utilities ========== */
-const DEBUG = true;
+export function useTimedSchedule(screenId?: string) {
+  const parent = useParentSchedules(screenId);
+  const clock = useServerClockStrict();
 
-const dGroup = (label: string) => {
-  if (!DEBUG) return { log: (_: any) => {}, end: () => {} };
-  const ts = new Date().toISOString();
-  // eslint-disable-next-line no-console
-  console.groupCollapsed(`[HomeScreen] ${label} @ ${ts}`);
-  return {
-    log: (obj: Record<string, any>) => {
-      // eslint-disable-next-line no-console
-      console.log(obj);
-    },
-    end: () => {
-      // eslint-disable-next-line no-console
-      console.groupEnd();
-    },
-  };
-};
+  const day = parent.data?.date;
+  const items: ParentScheduleItem[] = parent.data?.data ?? [];
 
-const describePlaylist = (pl: PlaylistT | null) => ({
-  slides: hasSlides(pl) ? pl.slides.length : 0,
-  hash: hashPlaylist(pl as any),
-});
+  const [activeScheduleId, setActiveScheduleId] = useState<number | undefined>(
+    undefined
+  );
 
-async function snapshotCacheStorage() {
-  if (!("caches" in window)) return { supported: false } as const;
-  try {
-    const names = await caches.keys();
-    const details: Record<string, { count: number; sample?: string[] }> = {};
-    for (const name of names) {
-      const cache = await caches.open(name);
-      const reqs = await cache.keys();
-      details[name] = {
-        count: reqs.length,
-        sample: reqs.slice(0, 5).map((r) => r.url),
+  const nowSec = clock.nowSecs();
+
+  const computed = useMemo(() => {
+    if (!day) {
+      return {
+        active: undefined as ParentScheduleItem | undefined,
+        next: null as ParentScheduleItem | null,
       };
     }
-    return { supported: true, names, details } as const;
-  } catch (e) {
-    return { supported: true, error: String(e) } as const;
-  }
-}
+    return resolveActiveAndNext(items, nowSec);
+  }, [day, items, nowSec]);
 
-function snapshotLocalCache() {
-  const lastDefault = loadLastGoodDefault();
-  const lastChild = loadLastGoodChild();
-  const now = getNowPlaying();
-  return {
-    lastDefault: lastDefault
-      ? {
-          savedAt: lastDefault.savedAt,
-          slides: lastDefault.playlist?.slides?.length ?? 0,
-          source: lastDefault.source,
-        }
-      : null,
-    lastChild: lastChild
-      ? {
-          savedAt: lastChild.savedAt,
-          slides: lastChild.playlist?.slides?.length ?? 0,
-          source: lastChild.source,
-        }
-      : null,
-    nowPlaying: now
-      ? {
-          savedAt: now.savedAt,
-          slides: now.playlist?.slides?.length ?? 0,
-          source: now.source,
-        }
-      : null,
-  };
-}
+  useEffect(() => {
+    setActiveScheduleId(pickScheduleId(computed.active) ?? undefined);
+  }, [computed.active]);
 
-/* ========== Prefetch Utilities ========== */
+  useEffect(() => {
+    if (!day) return;
+    // eslint-disable-next-line no-console
+    console.log("[SCHEDULE_DEBUG] useTimedSchedule", {
+      day,
+      nowSec,
+      items: items.map((it) => ({
+        scheduleId: pickScheduleId(it),
+        status: (it as any).status,
+        start: it.start_time,
+        end: it.end_time,
+      })),
+      activeScheduleId: pickScheduleId(computed.active),
+      nextScheduleId: pickScheduleId(computed.next),
+    });
+  }, [day, items, nowSec, computed.active, computed.next]);
 
-// خفيف
-async function warmPlaylistLight(
-  pl: PlaylistT | null,
-  windowCount = 2,
-  timeoutMs = 800
-) {
-  if (!hasSlides(pl)) return;
-  const cancels: Array<() => void> = [];
-  try {
-    const slides = pl.slides as any[];
-    cancels.push(prefetchSlideMedia(slides[0]));
-    cancels.push(prefetchWindow(slides, 0, windowCount));
-    await new Promise<void>((r) => setTimeout(r, timeoutMs));
-  } finally {
-    cancels.forEach((c) => c());
-  }
-}
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-// ثقيل
-function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
-  if (!hasSlides(playlist)) return () => {};
+  useEffect(() => {
+    if (!day || items.length === 0) return;
 
-  let cancelFetch = prefetchWholePlaylist(playlist as any);
-
-  const holder = document.createElement("div");
-  holder.style.position = "absolute";
-  holder.style.width = "0px";
-  holder.style.height = "0px";
-  holder.style.overflow = "hidden";
-  holder.style.opacity = "0";
-  holder.style.pointerEvents = "none";
-  document.body.appendChild(holder);
-
-  const created: Array<HTMLImageElement | HTMLVideoElement> = [];
-  for (const slide of (playlist!.slides as any[]) ?? []) {
-    for (const slot of slide.slots || []) {
-      const url = slot?.ImageFile as string | undefined;
-      const type = String(slot?.mediaType || "").toLowerCase();
-      if (!url) continue;
-      if (type === "video") {
-        const v = document.createElement("video");
-        v.preload = "auto";
-        v.muted = true;
-        v.playsInline = true;
-        v.src = url;
-        v.style.position = "absolute";
-        v.style.width = "1px";
-        v.style.height = "1px";
-        v.style.opacity = "0";
-        holder.appendChild(v);
-        created.push(v);
-      } else {
-        const img = new Image();
-        img.decoding = "async";
-        img.loading = "eager";
-        img.src = url;
-        created.push(img as any);
-      }
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-  }
 
-  const timer = window.setTimeout(() => {}, maxMs);
+    const delay = nextBoundaryDelayMsServer(items, clock);
+    if (delay == null) return;
 
-  return () => {
-    try {
-      window.clearTimeout(timer);
-    } catch {}
-    try {
-      created.forEach((el) => {
-        if (el instanceof HTMLVideoElement) {
-          try {
-            el.pause();
-            el.src = "";
-          } catch {}
-        }
-      });
-      if (holder.parentNode) holder.parentNode.removeChild(holder);
-    } catch {}
-    cancelFetch();
+    const fireDelay = Math.max(0, delay + 50);
+
+    timerRef.current = setTimeout(() => {
+      const nowAfter = clock.nowSecs();
+      const { active } = resolveActiveAndNext(items, nowAfter);
+      setActiveScheduleId(pickScheduleId(active) ?? undefined);
+      parent.refetch();
+    }, fireDelay);
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [day, items, parent, clock]);
+
+  // Safety guard: check كل 10 ثواني بناءً على ساعة السيرفر
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!day) return;
+      const now = clock.nowSecs();
+      const { active } = resolveActiveAndNext(items, now);
+      const newId = pickScheduleId(active) ?? undefined;
+      if (newId !== activeScheduleId) {
+        setActiveScheduleId(newId);
+      }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [day, items, activeScheduleId, clock]);
+
+  return {
+    parent,
+    activeScheduleId,
+    active: computed.active,
+    next: computed.next,
   };
+}  // src/features/schedule/hooks/useTimedScheduleData.ts
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useTimedSchedule } from "./useTimedSchedule";
+import { useChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
+import { prefetchNextPlaylist } from "../../../ReactQuery/schedule/prefetchNextPlaylist";
+import type { ParentScheduleItem } from "../../../types/schedule";
+import { qk } from "../../../ReactQuery/queryKeys";
+import { fetchDefaultPlaylist } from "../../../ReactQuery/schedule/useDefaultPlaylist";
+
+export const LS_SCREEN_ID = "screenId";
+
+// ⏱️ Prefetch thresholds (tweak here: 3 or 5 minutes)
+const PREFETCH_NEXT_CHILD_MS = 5 * 60_000; // 5 min before next schedule starts
+const PREFETCH_DEFAULT_BEFORE_END_MS = 5 * 60_000; // 5 min before current window ends
+
+function timeToStartMs(
+  item: ParentScheduleItem,
+  dayDate: string,
+  now = new Date()
+) {
+  const t = new Date(`${dayDate}T${item.start_time}`).getTime();
+  return t - now.getTime();
 }
 
-/* ========== Component ========== */
+function timeToEndMs(
+  item: ParentScheduleItem,
+  dayDate: string,
+  now = new Date()
+) {
+  const t = new Date(`${dayDate}T${item.end_time}`).getTime();
+  return t - now.getTime();
+}
 
-const PREWARM_LEAD_MS = 10 * 60 * 1000;
+export function useTimedScheduleData() {
+  const screenId =
+    (typeof window !== "undefined" && localStorage.getItem(LS_SCREEN_ID)) ||
+    undefined;
 
-const HomeScreen: React.FC = () => {
+  const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
+  const child = useChildPlaylist(activeScheduleId, screenId);
   const qc = useQueryClient();
-  const { screenId } = useScreenId();
 
-  const {
+  // Prefetch the NEXT schedule's child playlist ahead of time (5 minutes)
+  useEffect(() => {
+    if (!next || !parent.data?.date) return;
+
+    const ms = timeToStartMs(next, parent.data.date, new Date());
+    const delay = Math.max(0, ms - PREFETCH_NEXT_CHILD_MS);
+
+    let timer: number | undefined;
+    const arm = () => {
+      prefetchNextPlaylist(qc, next.scheduleId, screenId).catch(() => {});
+    };
+
+    if (delay === 0) {
+      arm();
+    } else {
+      timer = window.setTimeout(arm, delay);
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [next?.scheduleId, parent.data?.date, screenId, qc, next]);
+
+  // Prefetch the DEFAULT playlist shortly before the current window ends (5 minutes).
+  // This ensures when we hit a gap, default is ready and shows instantly.
+  useEffect(() => {
+    if (!active || !parent.data?.date || !screenId) return;
+
+    const ms = timeToEndMs(active, parent.data.date, new Date());
+    const delay = Math.max(0, ms - PREFETCH_DEFAULT_BEFORE_END_MS);
+
+    let timer: number | undefined;
+    const arm = () => {
+      qc.prefetchQuery({
+        queryKey: qk.def(screenId),
+        queryFn: () => fetchDefaultPlaylist(screenId),
+        staleTime: 5 * 60_000,
+      }).catch(() => {});
+    };
+
+    if (delay === 0) {
+      arm();
+    } else {
+      timer = window.setTimeout(arm, delay);
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [active?.scheduleId, parent.data?.date, screenId, qc, active]);
+
+  return {
+    screenId,
+    parent,
+    activeScheduleId,
+    active,
+    next,
+    child,
+    isLoading: parent.isLoading || child.isLoading,
+    isError: parent.isError || child.isError,
+  };
+}  // src/features/schedule/hooks/useResolvedPlaylist.ts
+import { useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useTimedSchedule } from "./useTimedSchedule";
+import {
+  useChildPlaylist,
+  fetchChildPlaylist,
+} from "../../../ReactQuery/schedule/useChildPlaylist";
+import {
+  useDefaultPlaylist,
+  fetchDefaultPlaylist,
+} from "../../../ReactQuery/schedule/useDefaultPlaylist";
+import {
+  saveLastGoodDefault,
+  loadLastGoodChild,
+  loadLastGoodDefault,
+  getNowPlaying,
+} from "../../../utils/playlistCache";
+import { prefetchWindow } from "../../../utils/mediaPrefetcher";
+import { qk } from "../../../ReactQuery/queryKeys";
+import { useServerClockStrict } from "../../../utils/useServerClockStrict";
+
+type Decision =
+  | { source: "child"; playlist: any; reason: string }
+  | { source: "default"; playlist: any; reason: string }
+  | { source: "cache"; playlist: any; reason: string }
+  | { source: "empty"; playlist: null; reason: string };
+
+const hasSlides = (pl?: any) => Array.isArray(pl?.slides) && pl.slides.length > 0;
+
+/* ---------- Safe access helpers ---------- */
+function pickStr(obj: unknown, key: string): string | undefined {
+  const v = (obj as any)?.[key];
+  return typeof v === "string" ? v : undefined;
+}
+function pickFirstDefined<T = any>(obj: unknown, keys: string[]): T | undefined {
+  for (const k of keys) {
+    const v = (obj as any)?.[k];
+    if (v !== undefined && v !== null) return v as T;
+  }
+  return undefined;
+}
+
+export function useResolvedPlaylist(screenId?: string) {
+  const qc = useQueryClient();
+  const clock = useServerClockStrict();
+
+  const { parent, activeScheduleId, active, next } = useTimedSchedule(screenId);
+
+  /* ── Live queries ─────────────────────────────────────────── */
+  const child = useChildPlaylist(activeScheduleId, screenId);
+
+  // ✅ مهم: نقرر الـ default بناءً على وجود active نفسه، مش الـ ID
+  const wantDefault =
+    !active || child.isError || !hasSlides(child.data?.playlist);
+
+  const defaultQ = useDefaultPlaylist(screenId, wantDefault as any);
+
+  /* ── Persist آخر نسخة ناجحة للـ Default فقط ─────────────── */
+  useEffect(() => {
+    if (hasSlides(defaultQ.data?.playlist)) {
+      saveLastGoodDefault(defaultQ.data!.playlist);
+    }
+  }, [defaultQ.data?.playlist]);
+
+  /* ── Prefetch default أثناء الفجوات ───────────────────────── */
+  useEffect(() => {
+    if (!screenId) return;
+    if (!active) {
+      qc
+        .prefetchQuery({
+          queryKey: qk.def(screenId),
+          queryFn: () => fetchDefaultPlaylist(screenId),
+          staleTime: 5 * 60_000,
+        })
+        .catch(() => {});
+    }
+  }, [screenId, active, qc]);
+
+  /* ── Prefetch child عند تغيّر الـschedule الفعّال ─────────── */
+  useEffect(() => {
+    if (!activeScheduleId) return;
+    qc
+      .prefetchQuery({
+        queryKey: qk.child(activeScheduleId, screenId),
+        queryFn: () => fetchChildPlaylist(activeScheduleId, screenId),
+        staleTime: 0,
+      })
+      .catch(() => {});
+  }, [activeScheduleId, screenId, qc]);
+
+  /* ── تأخيرات مبنية على ساعة السيرفر فقط (لـ prewarm/debug) ── */
+  const activeEndDelayMs = useMemo(() => {
+    const endTime = pickStr(active, "end_time"); // HH:mm:ss
+    return endTime ? clock.msUntil(endTime) : undefined;
+  }, [active, clock]);
+
+  const nextStartDelayMs = useMemo(() => {
+    const startTime = pickStr(next, "start_time"); // HH:mm:ss
+    return startTime ? clock.msUntil(startTime) : undefined;
+  }, [next, clock]);
+
+  const upcomingPlaylist = useMemo(() => {
+    return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
+  }, [next]);
+
+  /* ── Decision logic: نثق بالسيرفر/Reverb عند وجود schedule ── */
+  const decision: Decision = useMemo(() => {
+    const running = getNowPlaying() ?? null;
+
+    const cachedChild = loadLastGoodChild();
+    const cachedDefault = loadLastGoodDefault();
+
+    const liveChild = child.data?.playlist;
+    const liveDefault = defaultQ.data?.playlist;
+
+    // ✅ التحديد الحقيقي لوجود schedule فعّال
+    const hasActiveSchedule = !!active;
+
+    /* (A) لا يوجد schedule حالياً → نرجّح الـ Default دائماً */
+    if (!hasActiveSchedule) {
+      // 1) أحدث Default من السيرفر
+      if (hasSlides(liveDefault)) {
+        return {
+          source: "default",
+          playlist: liveDefault,
+          reason: "no schedule → fresh default",
+        };
+      }
+      // 2) Default من الكاش
+      if (hasSlides(cachedDefault?.playlist)) {
+        return {
+          source: "cache",
+          playlist: cachedDefault!.playlist,
+          reason: "no schedule → cached default",
+        };
+      }
+      // 3) لو الـrunning الحالي كان Default، خليه (ريفريش أو رجوع من أوفلاين)
+      if (
+        running &&
+        hasSlides(running.playlist) &&
+        running.source === "default"
+      ) {
+        return {
+          source: "cache",
+          playlist: running.playlist,
+          reason: "no schedule → keep running default",
+        };
+      }
+      // 4) لا شيء
+      return {
+        source: "empty",
+        playlist: null,
+        reason: "no schedule → no default available",
+      };
+    }
+
+    /* (B) يوجد schedule (السيرفر هو اللي قرر) */
+    // أولوية: Child من السيرفر
+    if (hasSlides(liveChild)) {
+      return {
+        source: "child",
+        playlist: liveChild,
+        reason: "active schedule → live child",
+      };
+    }
+
+    // ثم Child من الكاش (مرّت playlist لفة كاملة سابقاً)
+    if (hasSlides(cachedChild?.playlist)) {
+      return {
+        source: "cache",
+        playlist: cachedChild!.playlist,
+        reason: "active schedule → cached child",
+      };
+    }
+
+    // Fallback: Default (live ثم cached)
+    if (hasSlides(liveDefault)) {
+      return {
+        source: "default",
+        playlist: liveDefault,
+        reason: "active schedule → fallback default (live)",
+      };
+    }
+    if (hasSlides(cachedDefault?.playlist)) {
+      return {
+        source: "cache",
+        playlist: cachedDefault!.playlist,
+        reason: "active schedule → fallback default (cached)",
+      };
+    }
+
+    // آخر محاولة: لو في running playlist خلّيه
+    if (running && hasSlides(running.playlist)) {
+      return {
+        source: "cache",
+        playlist: running.playlist,
+        reason: "active schedule → keep running playlist",
+      };
+    }
+
+    // لا شيء متاح رغم وجود schedule
+    return {
+      source: "empty",
+      playlist: null,
+      reason: "active schedule → nothing available",
+    };
+  }, [
+    active,
+    child.data?.playlist,
+    defaultQ.data?.playlist,
+  ]);
+
+  /* ── Prefetch نافذة مبكّرة من القرار الحالي ─────────────── */
+  useEffect(() => {
+    if (!hasSlides(decision.playlist)) return;
+    const cancel = prefetchWindow(decision.playlist.slides, 0, 2);
+    return () => cancel();
+  }, [decision.playlist]);
+
+  /* ── Quiet refresh helper ────────────────────────────────── */
+  const quietRefreshAll = async (overrideScheduleId?: number | string | null) => {
+    const sid = overrideScheduleId ?? activeScheduleId ?? undefined;
+    const parentKey = qk.parent(screenId);
+    const childKey = sid != null ? qk.child(sid, screenId) : null;
+    const defaultKey = qk.def(screenId);
+
+    await qc.invalidateQueries({ queryKey: parentKey, refetchType: "active" });
+    if (childKey)
+      await qc.invalidateQueries({ queryKey: childKey, refetchType: "active" });
+    await qc.invalidateQueries({ queryKey: defaultKey, refetchType: "active" });
+
+    await qc.refetchQueries({ queryKey: parentKey, type: "active" });
+    if (childKey)
+      await qc.refetchQueries({ queryKey: childKey, type: "active" });
+    await qc.refetchQueries({ queryKey: defaultKey, type: "active" });
+  };
+
+  // isLoading ما لازم يطفي الشاشة إذا معنا Playlist جاهزة للعرض
+  const anyLoading = parent.isLoading || child.isLoading || defaultQ.isLoading;
+  const isLoadingSafe = anyLoading && !hasSlides(decision.playlist);
+
+  return {
+    parent,
+    active,
+    next,
     activeScheduleId,
     decision,
-    isLoading,
+    isLoading: isLoadingSafe,
+    isError: parent.isError && child.isError && defaultQ.isError,
     quietRefreshAll,
-    // من الهُوك (تأخيرات فقط)
     activeEndDelayMs,
     nextStartDelayMs,
     upcomingPlaylist,
-  } = useResolvedPlaylist(screenId);
-
-  // اتصال
-  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
-
-  useEffect(() => {
-    const on = () => {
-      setIsOnline(true);
-      const g = dGroup("NET_ONLINE");
-      g.log({ isOnline: true });
-      g.end();
-    };
-    const off = () => {
-      setIsOnline(false);
-      const g = dGroup("NET_OFFLINE");
-      g.log({ isOnline: false });
-      g.end();
-    };
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => {
-      window.removeEventListener("online", on);
-      window.removeEventListener("offline", off);
-    };
-  }, []);
-
-  // مراقبة netMode + تكييف مدى تسخين الفيديو
-  useEffect(() => {
-    const tick = () => {
-      const m = currentNetMode();
-      setNetMode(m);
-      setAdaptiveVideoWarmRange(m);
-    };
-    tick();
-    const id = window.setInterval(tick, 4000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const latest = useRef<{
-    screenId?: string | number;
-    scheduleId?: string | number;
-  }>({});
-  useEffect(() => {
-    latest.current = { screenId, scheduleId: activeScheduleId };
-    const g = dGroup("STATE");
-    g.log({
-      screenId,
-      activeScheduleId,
-      isOnline,
-      netMode,
-      activeEndDelayMs,
-      nextStartDelayMs,
-    });
-    g.end();
-  }, [
-    screenId,
-    activeScheduleId,
-    isOnline,
-    netMode,
-    activeEndDelayMs,
-    nextStartDelayMs,
-  ]);
-
-  const cachedDefault: PlaylistT | null = useMemo(() => {
-    const cached = loadLastGoodDefault();
-    const pl = (cached?.playlist as PlaylistT | undefined) || null;
-    if (hasSlides(pl)) {
-      const g = dGroup("CACHED_DEFAULT");
-      g.log(describePlaylist(pl));
-      g.end();
-      return pl;
-    }
-    return null;
-  }, []);
-
-  const targetPlaylist: PlaylistT | null = useMemo(() => {
-    const serverPl = (decision.playlist as PlaylistT | undefined) || null;
-    const target = hasSlides(serverPl) ? serverPl : cachedDefault;
-    const reason = hasSlides(serverPl)
-      ? `decision:${(decision as any)?.source}`
-      : cachedDefault
-      ? "cached-default"
-      : "none";
-    const g = dGroup("TARGET");
-    g.log({ reason, ...describePlaylist(target || null) });
-    g.end();
-    return target || null;
-  }, [decision.playlist, (decision as any)?.source, cachedDefault]);
-
-  // -------- Double Buffering --------
-  const [current, setCurrent] = useState<PlaylistT | null>(
-    () => targetPlaylist
-  );
-  const [next, setNext] = useState<PlaylistT | null>(null);
-  const [nextReady, setNextReady] = useState(false);
-  const [isSwapping, setIsSwapping] = useState(false);
-
-  const currentHash = useRef<string>(hashPlaylist(current as any));
-  const swapAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
-
-  // قفل/حظر
-  const degradedLockUntil = useRef<number>(0);
-  const blockTargetUntil = useRef<number>(0);
-
-  // فلاغ انتهاء نافذة child أثناء الأوفلاين
-  const forcedDefaultDueToExpiryRef = useRef<boolean>(false);
-  const offlineExpiryTimerRef = useRef<number | null>(null);
-
-  // سواب عند تغيّر الهدف (إلا إذا محظور مؤقتًا)
-  useEffect(() => {
-    const targetHash = hashPlaylist(targetPlaylist as any);
-    if (Date.now() < blockTargetUntil.current) return;
-    if (!targetPlaylist || targetHash === currentHash.current) return;
-
-    swapAbortRef.current.aborted = true;
-    swapAbortRef.current = { aborted: false };
-
-    setNext(targetPlaylist);
-    setNextReady(false);
-    let g = dGroup("STAGE_NEXT");
-    g.log({ target: describePlaylist(targetPlaylist) });
-    g.end();
-
-    (async () => {
-      const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
-      await warmPlaylistLight(targetPlaylist, winCount, 800);
-      if (swapAbortRef.current.aborted) return;
-      setNextReady(true);
-      g = dGroup("NEXT_READY");
-      g.log(describePlaylist(targetPlaylist));
-      g.end();
-
-      setIsSwapping(true);
-      setTimeout(() => {
-        if (swapAbortRef.current.aborted) return;
-        setCurrent(targetPlaylist);
-        currentHash.current = targetHash;
-        setIsSwapping(false);
-        setNext(null);
-        setNextReady(false);
-        const g2 = dGroup("SWAP_DONE");
-        g2.log({ current: describePlaylist(targetPlaylist) });
-        g2.end();
-      }, 250);
-    })();
-
-    return () => {
-      swapAbortRef.current.aborted = true;
-    };
-  }, [targetPlaylist, netMode]);
-
-  // حفظ ما يُعرض
-  useEffect(() => {
-    if (!hasSlides(current)) return;
-    const sameAsDecision =
-      hasSlides(decision.playlist as any) &&
-      hashPlaylist(decision.playlist as any) === hashPlaylist(current as any);
-    const source: "child" | "default" =
-      sameAsDecision && (decision as any).source === "child"
-        ? "child"
-        : "default";
-    setNowPlaying(source, current);
-    const g = dGroup("DISPLAY_NOW");
-    g.log({ source, ...describePlaylist(current) });
-    g.end();
-  }, [current, decision.playlist, (decision as any).source]);
-
-  const quietRefresh = async (overrideScheduleId?: number | string | null) => {
-    if (Date.now() < blockTargetUntil.current) return;
-    await quietRefreshAll(
-      overrideScheduleId ?? latest.current.scheduleId ?? null
-    );
   };
+}  // src/utils/scheduleTime.ts
+import type { ParentScheduleItem } from "../types/schedule";
 
-  // دفع السيرفر — تحديث هادئ
-  useEffect(() => {
-    if (!screenId) return;
-    const channelName = `screens.${screenId}`;
-    const channel = echo.channel(channelName);
+/* HH:mm:ss → seconds of day (0–86399) */
+export function toSecs(hms?: string | null) {
+  const [h = "0", m = "0", s = "0"] = String(hms ?? "").split(":");
+  const hh = Math.max(0, Math.min(23, parseInt(h) || 0));
+  const mm = Math.max(0, Math.min(59, parseInt(m) || 0));
+  const ss = Math.max(0, Math.min(59, parseInt(s) || 0));
+  return hh * 3600 + mm * 60 + ss;
+}
 
-    let refreshTimer: number | undefined;
-    const triggerRefresh = (sid: number | string | null) => {
-      if (Date.now() < blockTargetUntil.current) return;
-      if (refreshTimer) window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(async () => {
-        const g = dGroup("SERVER_PUSH");
-        g.log({ channelName, sid, note: "quietRefresh start" });
-        g.end();
-        try {
-          await quietRefresh(sid);
-          const g2 = dGroup("REFRESH_DONE");
-          g2.log({ channelName, sid });
-          g2.end();
-        } catch (err) {
-          const g3 = dGroup("REFRESH_ERR");
-          g3.log({ err: String(err) });
-          g3.end();
-        }
-      }, 75);
-    };
+/** Normalize status → inactive or not */
+export function isInactiveSchedule(rawStatus: any): boolean {
+  const s = String(rawStatus ?? "active").toLowerCase().trim();
+  // 🔧 tweak these if your backend uses other values
+  if (s === "inactive" || s === "0" || s === "false") return true;
+  return false;
+}
 
-    const on = (label: string) => (payload: ScheduleUpdatePayload) => {
-      const sid = (payload?.scheduleId ?? latest.current.scheduleId ?? null) as
-        | number
-        | string
-        | null;
-      const g = dGroup("SERVER_EVENT");
-      g.log({ label, payload, sid });
-      g.end();
-      triggerRefresh(sid);
-    };
+/** Does this schedule cover nowSec, including cross-midnight windows? */
+export function isScheduleActiveAt(
+  item: ParentScheduleItem,
+  nowSec: number
+): boolean {
+  const start = toSecs(item.start_time);
+  const end = toSecs(item.end_time);
+  const inactive = isInactiveSchedule((item as any).status);
 
-    channel.listen(".ScheduleUpdate", on("ScheduleUpdate"));
-    channel.listen(".PlaylistReload", on("PlaylistReload"));
+  if (inactive) return false;
 
-    const off = ReverbConnection.onStatus((s) => {
-      if (s === "connected") {
-        try {
-          echo.leave(channelName);
-        } catch {}
-        const c = echo.channel(channelName);
-        c.listen(".ScheduleUpdate", on("ScheduleUpdate(reconnect)"));
-        c.listen(".PlaylistReload", on("PlaylistReload(reconnect)"));
-      }
-    });
+  const crossesMidnight = end < start;
 
-    return () => {
-      try {
-        channel.stopListening(".ScheduleUpdate");
-        channel.stopListening(".PlaylistReload");
-        echo.leave(channelName);
-      } catch {}
-      off();
-      if (refreshTimer) window.clearTimeout(refreshTimer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenId, qc]);
-
-  // احفظ Child بعد اكتمال دورة
-  useEffect(() => {
-    const onLoop = () => {
-      if (!hasSlides(current)) return;
-      if ((decision as any)?.source === "child") {
-        saveLastGoodChild(current);
-        const g = dGroup("LOOP_SAVED_CHILD");
-        g.log(describePlaylist(current));
-        g.end();
-      }
-    };
-    window.addEventListener("playlist:loop", onLoop);
-    return () => window.removeEventListener("playlist:loop", onLoop);
-  }, [current, (decision as any)?.source]);
-
-  // fallback خفيف عند التدهور (skip-once)
-  useEffect(() => {
-    const onDegraded = async () => {
-      const now = Date.now();
-      if (now < degradedLockUntil.current) return;
-      window.dispatchEvent(new CustomEvent("playlist:skip-once"));
-      blockTargetUntil.current = now + 5000;
-      degradedLockUntil.current = now + 5000;
-      return;
-    };
-    window.addEventListener("playback:degraded", onDegraded);
-    return () => window.removeEventListener("playback:degraded", onDegraded);
-  }, []);
-
-  // عند فقد الاتصال: لا سواب، نظل نعرض الحالي
-  useEffect(() => {
-    if (!isOnline) {
-      blockTargetUntil.current = Date.now() + 15_000;
-      const g = dGroup("OFFLINE_HOLD");
-      g.log({ until: blockTargetUntil.current });
-      g.end();
-    }
-  }, [isOnline]);
-
-  // ====== حارس انتهاء نافذة Child أثناء الأوفلاين (باستخدام delay جاهز من السيرفر) ======
-  useEffect(() => {
-    if (offlineExpiryTimerRef.current) {
-      window.clearTimeout(offlineExpiryTimerRef.current);
-      offlineExpiryTimerRef.current = null;
-    }
-    if (!isOnline && typeof activeEndDelayMs === "number") {
-      const delay = Math.max(0, activeEndDelayMs); // 0 يعني انتهت النافذة الآن
-      if (delay === 0) {
-        // انتهت أصلاً
-        forcedDefaultDueToExpiryRef.current = true;
-        (async () => {
-          const def = loadLastGoodDefault()?.playlist as PlaylistT | undefined;
-          if (!hasSlides(def)) return;
-          const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
-          await warmPlaylistLight(def!, winCount, 500);
-          setCurrent(def!);
-          currentHash.current = hashPlaylist(def as any);
-          const g = dGroup("FORCED_DEFAULT_IMMEDIATE");
-          g.log({
-            reason: "child window expired offline",
-            def: describePlaylist(def!),
-          });
-          g.end();
-        })();
-      } else {
-        offlineExpiryTimerRef.current = window.setTimeout(async () => {
-          forcedDefaultDueToExpiryRef.current = true;
-          const def = loadLastGoodDefault()?.playlist as PlaylistT | undefined;
-          if (!hasSlides(def)) return;
-          const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
-          await warmPlaylistLight(def!, winCount, 500);
-          setCurrent(def!);
-          currentHash.current = hashPlaylist(def as any);
-          const g = dGroup("FORCED_DEFAULT_SCHEDULED");
-          g.log({ afterMs: delay, def: describePlaylist(def!) });
-          g.end();
-        }, delay);
-      }
-    }
-    return () => {
-      if (offlineExpiryTimerRef.current) {
-        window.clearTimeout(offlineExpiryTimerRef.current);
-        offlineExpiryTimerRef.current = null;
-      }
-    };
-  }, [isOnline, activeEndDelayMs, netMode]);
-
-  // ✅ عند رجوع الاتصال: لا نستأنف Child من الكاش إذا لا يوجد activeSchedule
-  useEffect(() => {
-    if (!isOnline) return;
-    (async () => {
-      try {
-        await quietRefresh(null);
-
-        if (!activeScheduleId) {
-          const g = dGroup("RESUME_SKIP_NO_SCHEDULE");
-          g.log({
-            note: "online + no schedule → keep default, skip child resume",
-          });
-          g.end();
-          blockTargetUntil.current = 0;
-          const swSnap = await snapshotCacheStorage();
-          const g2 = dGroup("CACHE_SNAPSHOT_AFTER_RESUME");
-          g2.log({ local: snapshotLocalCache(), cacheStorage: swSnap });
-          g2.end();
-          return;
-        }
-
-        if (forcedDefaultDueToExpiryRef.current) {
-          const g = dGroup("RESUME_BLOCKED_DUE_TO_EXPIRED_CHILD");
-          g.log({ note: "skip resume-from-cache; wait server decision" });
-          g.end();
-        } else {
-          const childCached = loadLastGoodChild()?.playlist as
-            | PlaylistT
-            | undefined;
-          if (hasSlides(childCached)) {
-            const childHash = hashPlaylist(childCached as any);
-            const currHash = hashPlaylist(current as any);
-            if (childHash !== currHash) {
-              swapAbortRef.current.aborted = true;
-              setNext(null);
-              setNextReady(false);
-              setIsSwapping(false);
-
-              const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
-              await warmPlaylistLight(childCached!, winCount, 500);
-              setCurrent(childCached!);
-              currentHash.current = childHash;
-
-              const g = dGroup("RESUME_CHILD_FROM_CACHE");
-              g.log({
-                child: describePlaylist(childCached!),
-                curr: describePlaylist(current),
-              });
-              g.end();
-            } else {
-              const g = dGroup("RESUME_CHILD_SKIP");
-              g.log({ reason: "already on child or same hash" });
-              g.end();
-            }
-          } else {
-            const g = dGroup("RESUME_CHILD_NO_CACHE");
-            g.log({});
-            g.end();
-          }
-        }
-
-        blockTargetUntil.current = 0;
-
-        const localSnap = snapshotLocalCache();
-        const swSnap = await snapshotCacheStorage();
-        const g2 = dGroup("CACHE_SNAPSHOT_AFTER_RESUME");
-        g2.log({ local: localSnap, cacheStorage: swSnap });
-        g2.end();
-      } catch (e) {
-        const g = dGroup("RESUME_CHILD_ERR");
-        g.log({ e: String(e) });
-        g.end();
-      }
-    })();
-  }, [isOnline, netMode, current, activeScheduleId]);
-
-  // صفّر الفلاغ تلقائيًا عندما يصل Child جديد بهاش مختلف
-  useEffect(() => {
-    if (!hasSlides(decision.playlist)) return;
-    if ((decision as any).source === "child") {
-      if (hashPlaylist(decision.playlist) !== currentHash.current) {
-        forcedDefaultDueToExpiryRef.current = false;
-        const g = dGroup("CLEAR_FORCED_FLAG_ON_NEW_CHILD");
-        g.log({ note: "new child arrived with different hash" });
-        g.end();
-      }
-    }
-  }, [decision.playlist, (decision as any)?.source]);
-
-  // تسخين ثقيل قبل 10 دقائق (باستخدام delay القادم من السيرفر)
-  const prewarmTimerRef = useRef<number | null>(null);
-  const stopHeadlessRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    if (prewarmTimerRef.current) {
-      window.clearTimeout(prewarmTimerRef.current);
-      prewarmTimerRef.current = null;
-    }
-    try {
-      stopHeadlessRef.current();
-    } catch {}
-    stopHeadlessRef.current = () => {};
-
-    if (typeof nextStartDelayMs === "number" && hasSlides(upcomingPlaylist)) {
-      const ms = Math.max(0, nextStartDelayMs - PREWARM_LEAD_MS);
-      const g = dGroup("SCHEDULE_PREWARM");
-      g.log({
-        inMs: ms,
-        nextDelayMs: nextStartDelayMs,
-        upcoming: describePlaylist(upcomingPlaylist),
-      });
-      g.end();
-
-      prewarmTimerRef.current = window.setTimeout(() => {
-        stopHeadlessRef.current = headlessWarmDOM(
-          upcomingPlaylist,
-          3 * 60 * 1000
-        );
-      }, ms);
-    }
-    return () => {
-      if (prewarmTimerRef.current) {
-        window.clearTimeout(prewarmTimerRef.current);
-        prewarmTimerRef.current = null;
-      }
-      try {
-        stopHeadlessRef.current();
-      } catch {}
-      stopHeadlessRef.current = () => {};
-    };
-  }, [nextStartDelayMs, upcomingPlaylist]);
-
-  // بديل: لو ما في scheduling، سخّن الهدف الحالي عند تغيّره (إلا إذا محظور)
-  useEffect(() => {
-    if (typeof nextStartDelayMs === "number" && upcomingPlaylist) return;
-
-    try {
-      stopHeadlessRef.current();
-    } catch {}
-    stopHeadlessRef.current = () => {};
-
-    if (Date.now() < blockTargetUntil.current) return;
-    if (hasSlides(targetPlaylist)) {
-      const g = dGroup("HEADLESS_WARM_NOW");
-      g.log(describePlaylist(targetPlaylist));
-      g.end();
-
-      stopHeadlessRef.current = headlessWarmDOM(targetPlaylist, 2 * 60 * 1000);
-    }
-
-    return () => {
-      try {
-        stopHeadlessRef.current();
-      } catch {}
-      stopHeadlessRef.current = () => {};
-    };
-  }, [targetPlaylist, nextStartDelayMs, upcomingPlaylist]);
-
-  // Idle full prefetch للـcurrent لما الظروف ممتازة
-  useEffect(() => {
-    if (!hasSlides(current)) return;
-    if (netMode !== "ONLINE_GOOD") return;
-    if (nextReady || isSwapping) return;
-    const cancel = prefetchWholePlaylist(current as any);
-    return () => cancel();
-  }, [current, netMode, nextReady, isSwapping]);
-
-  // Heartbeat كل 15 ثانية
-  const didSnapshotOnce = useRef(false);
-  useEffect(() => {
-    const id = window.setInterval(async () => {
-      const g = dGroup("HEARTBEAT");
-      g.log({
-        isOnline,
-        netMode,
-        current: describePlaylist(current),
-        next: describePlaylist(next),
-        nextReady,
-        isSwapping,
-        locks: {
-          degradedLockUntil: degradedLockUntil.current,
-          blockTargetUntil: blockTargetUntil.current,
-        },
-        flags: {
-          forcedDefaultDueToExpiry: forcedDefaultDueToExpiryRef.current,
-        },
-        nowPlaying: getNowPlaying(),
-      });
-      if (!didSnapshotOnce.current) {
-        didSnapshotOnce.current = true;
-        g.log({ localCache: snapshotLocalCache() });
-        const swSnap = await snapshotCacheStorage();
-        g.log({ cacheStorage: swSnap });
-      }
-      g.end();
-    }, 15000);
-    return () => window.clearInterval(id);
-  }, [isOnline, netMode, current, next, nextReady, isSwapping]);
-
-  // UI
-  if (!screenId) {
-    return (
-      <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
-        Device not linked.
-      </main>
-    );
+  if (crossesMidnight) {
+    // Example: 20:00 → 02:00
+    // Active if now >= 20:00 OR now < 02:00
+    return nowSec >= start || nowSec < end;
   }
 
-  if (!hasSlides(current) && isLoading) {
-    return (
-      <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
-        Loading…
-      </main>
-    );
-  }
+  // Normal same-day window
+  return nowSec >= start && nowSec < end;
+}
 
-  return (
-    <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
-      {hasSlides(current) && (
-        <div className="absolute inset-0">
-          <SmartPlayer
-            key={`current-${hashPlaylist(current as any)}`}
-            playlist={current as PlaylistT}
-            screenId={screenId}
-            scheduleId={activeScheduleId}
-            onRequestRefetch={() => void quietRefresh(null)}
-          />
-        </div>
-      )}
+/** Compute active + next based on server seconds-of-day */
+export function resolveActiveAndNext(
+  items: ParentScheduleItem[],
+  nowSec: number
+): { active: ParentScheduleItem | undefined; next: ParentScheduleItem | null } {
+  if (!items.length) return { active: undefined, next: null };
 
-      {hasSlides(next) && (
-        <div
-          className={classNames(
-            "absolute inset-0 transition-opacity duration-300",
-            nextReady ? "opacity-100" : "opacity-0 pointer-events-none"
-          )}
-        >
-          <SmartPlayer
-            key={`next-${hashPlaylist(next as any)}`}
-            playlist={next as PlaylistT}
-            screenId={screenId}
-            scheduleId={activeScheduleId}
-            onRequestRefetch={() => void quietRefresh(null)}
-          />
-        </div>
-      )}
-
-      <div className="pointer-events-none absolute inset-0 bg-black/0" />
-    </main>
+  const sorted = [...items].sort(
+    (a, b) => toSecs(a.start_time) - toSecs(b.start_time)
   );
-};
 
-export default HomeScreen;
+  let active: ParentScheduleItem | undefined;
+  let next: ParentScheduleItem | null = null;
+
+  for (const it of sorted) {
+    const start = toSecs(it.start_time);
+    const inactive = isInactiveSchedule((it as any).status);
+
+    // Active right now?
+    if (isScheduleActiveAt(it, nowSec)) {
+      active = it;
+      continue;
+    }
+
+    // First future window after now = next
+    if (!inactive && start > nowSec && next == null) {
+      next = it;
+    }
+  }
+
+  return { active, next };
+}  we have a bug in the active schedule and display in the time 
