@@ -1,5 +1,4 @@
 // src/features/schedule/components/PlaylistDebugPanel.tsx
-
 import React, { useEffect, useMemo, useState } from "react";
 import type { PlaylistSlide } from "../../../types/schedule";
 import { useServerClockStrict } from "../../../utils/useServerClockStrict";
@@ -12,8 +11,8 @@ type Props = {
   slides: PlaylistSlide[];
   activeIndex: number;
   scheduleId?: string | number;
-  // كم مرق على الشريحة الحالية (من PlaylistPlayer)
-  slideElapsed: number;
+  /** كم ثانية مرقوا على الشريحة الحالية – محسوبة من التايمر في PlaylistPlayer */
+  slideElapsed?: number;
 };
 
 const DAY_SEC = 86400;
@@ -22,6 +21,7 @@ function clampDay(s: number) {
   return ((s % DAY_SEC) + DAY_SEC) % DAY_SEC;
 }
 
+// ✅ HH:MM:SS.mmm
 function secsToHHMMSSmmm(s: number) {
   s = clampDay(s);
   const totalInt = Math.floor(s);
@@ -38,7 +38,7 @@ function secsToHHMMSSmmm(s: number) {
   );
 }
 
-// عدّ الميديا داخل الشريحة (للمعلومة فقط)
+// محاولة عامة لعدّ الميديا داخل الشريحة
 function countMediaInSlide(slide?: PlaylistSlide | null): number {
   if (!slide) return 0;
   const anySlide = slide as any;
@@ -85,30 +85,52 @@ const PlaylistDebugPanel: React.FC<Props> = ({
   slides,
   activeIndex,
   scheduleId,
-  slideElapsed,
+  slideElapsed = 0,
 }) => {
   const clock = useServerClockStrict();
 
-  // server time
+  // 🧠 نقرأ قيم البداية فوراً من الـ clock
   const initialSecs = clock.nowSecs();
-  const [serverTime, setServerTime] = useState<string>(
+  const [serverTime, setServerTime] = useState<string>(() =>
     secsToHHMMSSmmm(initialSecs)
   );
-  const [serverSecsRaw, setServerSecsRaw] = useState<string>(
+  const [serverSecsRaw, setServerSecsRaw] = useState<string>(() =>
     initialSecs.toFixed(3)
   );
-  const [driftSec, setDriftSec] = useState<number>(clock.driftSec());
-  const [tz, setTz] = useState<string | null>(clock.timezone());
-
-  // cache info
+  const [driftSec, setDriftSec] = useState<number>(() => clock.driftSec());
+  const [tz, setTz] = useState<string | null>(() => clock.timezone());
   const [isCached, setIsCached] = useState<boolean | null>(null);
 
   const slide = slides[activeIndex] ?? null;
-  const duration = Number(slide?.duration || 0);
+  const rawDuration =
+    typeof slide?.duration === "number" && Number.isFinite(slide.duration)
+      ? (slide.duration as number)
+      : null;
+
+  // ⏱️ نضبط elapsed/left/progress بناءً على duration (لو موجود)
+  const { duration, elapsed, left, progress } = useMemo(() => {
+    if (!rawDuration || rawDuration <= 0) {
+      return {
+        duration: null as number | null,
+        elapsed: slideElapsed,
+        left: null as number | null,
+        progress: null as number | null,
+      };
+    }
+    const e = Math.max(0, Math.min(slideElapsed, rawDuration));
+    const l = Math.max(0, rawDuration - e);
+    const p = Math.max(0, Math.min(100, (e / rawDuration) * 100));
+    return {
+      duration: rawDuration,
+      elapsed: e,
+      left: l,
+      progress: p,
+    };
+  }, [rawDuration, slideElapsed]);
 
   const mediaCount = useMemo(() => countMediaInSlide(slide), [slide]);
 
-  // server clock تحديث كل ثانية
+  // ⏱️ تحديث وقت السيرفر كل ثانية — نربطه مرّة واحدة فقط
   useEffect(() => {
     const id = window.setInterval(() => {
       const secs = clock.nowSecs();
@@ -120,26 +142,21 @@ const PlaylistDebugPanel: React.FC<Props> = ({
 
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // ما نحط clock بالـ deps عشان ما ينعاد الـ effect
 
-  // حساب الوقت المتبقي + progress
-  const elapsed = slideElapsed;
-  const timeLeft = Math.max(0, duration - elapsed);
-  const progress = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0;
-
-  // فحص الكاش (child/default)
+  // 👇 فحص الكاش مرّة واحدة (أو لما scheduleId يتغيّر)
   useEffect(() => {
     try {
       const cachedChild = loadLastGoodChild();
       const cachedDefault = loadLastGoodDefault();
 
       const childHasCached =
-        !!cachedChild?.playlist?.slides &&
+        !!cachedChild?.playlist &&
         Array.isArray(cachedChild.playlist.slides) &&
         cachedChild.playlist.slides.length > 0;
 
       const defaultHasCached =
-        !!cachedDefault?.playlist?.slides &&
+        !!cachedDefault?.playlist &&
         Array.isArray(cachedDefault.playlist.slides) &&
         cachedDefault.playlist.slides.length > 0;
 
@@ -152,73 +169,85 @@ const PlaylistDebugPanel: React.FC<Props> = ({
 
   return (
     <div className="pointer-events-none absolute top-3 right-3 z-50">
-      <div className="bg-black/70 border border-white/20 rounded-lg px-3 py-2 text-[11px] leading-snug text-white shadow-lg min-w-[240px] space-y-1 font-mono">
+      <div className="bg-black/70 border border-emerald-500/40 rounded-lg px-3 py-2 text-[11px] leading-snug text-white shadow-lg min-w-[220px] space-y-1">
         <div className="font-semibold text-xs text-emerald-300">
           Debug · Playlist
         </div>
 
         {/* Server clock */}
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Server</span>
-          <span>{serverTime}</span>
+          <span className="font-mono">{serverTime}</span>
         </div>
-
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Secs</span>
-          <span>{serverSecsRaw}</span>
+          <span className="font-mono">{serverSecsRaw}</span>
         </div>
-
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Drift</span>
-          <span>{driftSec.toFixed(3)}s</span>
+          <span className="font-mono">{driftSec.toFixed(3)}s</span>
         </div>
-
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">TZ</span>
-          <span>{tz ?? "…"}</span>
+          <span className="font-mono">
+            {tz ?? <span className="text-white/40">…</span>}
+          </span>
         </div>
 
-        <div className="mt-1 border-t border-white/10 pt-1" />
+        {/* Schedule / slide info */}
+        <div className="h-px bg-white/10 my-1" />
 
-        {/* Slide info */}
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Schedule</span>
-          <span>{scheduleId ?? "none"}</span>
+          <span className="font-mono">
+            {scheduleId ?? <span className="text-white/40">none</span>}
+          </span>
         </div>
 
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Slide</span>
-          <span>
+          <span className="font-mono">
             {slides.length ? `${activeIndex + 1} / ${slides.length}` : "-"}
           </span>
         </div>
 
-        <div className="flex justify-between">
+        {/* Duration / elapsed / left / progress */}
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Duration</span>
-          <span>{duration > 0 ? `${duration}s` : "auto / none"}</span>
+          <span className="font-mono">
+            {duration ? `${duration.toFixed(0)}s` : "auto / none"}
+          </span>
         </div>
 
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Elapsed</span>
-          <span>{elapsed.toFixed(2)}s</span>
+          <span className="font-mono">
+            {elapsed.toFixed(2)}
+            s
+          </span>
         </div>
 
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Left</span>
-          <span>{timeLeft.toFixed(2)}s</span>
+          <span className="font-mono">
+            {left != null ? `${left.toFixed(2)}s` : "—"}
+          </span>
         </div>
 
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Progress</span>
-          <span>{progress.toFixed(1)}%</span>
+          <span className="font-mono">
+            {progress != null ? `${progress.toFixed(1)}%` : "—"}
+          </span>
         </div>
 
-        <div className="flex justify-between">
+        {/* Media + cache */}
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Media in slide</span>
-          <span>{mediaCount}</span>
+          <span className="font-mono">{mediaCount}</span>
         </div>
 
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-3">
           <span className="text-white/60">Cached</span>
           <span
             className={

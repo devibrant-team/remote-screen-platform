@@ -256,7 +256,11 @@ export function useResolvedPlaylist(screenId?: string) {
     child.data?.playlist,
     defaultQ.data?.playlist,
     nowSec,
+    parent.isLoading,
+    child.isError,
+    defaultQ.isError,
   ]);
+
 
 
   /* ── Prefetch نافذة مبكّرة من القرار الحالي ─────────────── */

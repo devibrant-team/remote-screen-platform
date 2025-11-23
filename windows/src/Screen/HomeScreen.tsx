@@ -1,3 +1,4 @@
+// src/pages/HomeScreen.tsx (أو نفس المسار عندك)
 import "swiper/css";
 import "swiper/css/effect-fade";
 
@@ -42,10 +43,6 @@ const describePlaylist = (pl: PlaylistT | null) => ({
   slides: hasSlides(pl) ? pl.slides.length : 0,
   hash: hashPlaylist(pl as any),
 });
-
-/* ────────────────────────────────────────────
-   Prefetch helpers
-────────────────────────────────────────────── */
 
 async function warmPlaylistLight(
   pl: PlaylistT | null,
@@ -128,10 +125,6 @@ function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
   };
 }
 
-/* ────────────────────────────────────────────
-   Component
-────────────────────────────────────────────── */
-
 const PREWARM_LEAD_MS = 10 * 60 * 1000;
 
 const HomeScreen: React.FC = () => {
@@ -139,6 +132,9 @@ const HomeScreen: React.FC = () => {
   const { screenId } = useScreenId();
 
   const {
+    parent,
+    active,
+    next,
     activeScheduleId,
     decision,
     isLoading,
@@ -195,6 +191,7 @@ const HomeScreen: React.FC = () => {
     screenId?: string | number;
     scheduleId?: string | number;
   }>({});
+
   useEffect(() => {
     latest.current = { screenId, scheduleId: activeScheduleId };
   }, [screenId, activeScheduleId]);
@@ -211,11 +208,18 @@ const HomeScreen: React.FC = () => {
     return target || null;
   }, [decision.playlist, (decision as any)?.source, cachedDefault]);
 
+  // 🔁 childStartTime فقط لو القرار الحالي من نوع child
+  const childStartTime: string | null = useMemo(() => {
+    if ((decision as any)?.source !== "child") return null;
+    // active هو ParentScheduleItem
+    return (active as any)?.start_time ?? null;
+  }, [decision, active]);
+
   // -------- Double Buffering --------
   const [current, setCurrent] = useState<PlaylistT | null>(
     () => targetPlaylist
   );
-  const [next, setNext] = useState<PlaylistT | null>(null);
+  const [nextPl, setNextPl] = useState<PlaylistT | null>(null);
   const [nextReady, setNextReady] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
 
@@ -233,7 +237,7 @@ const HomeScreen: React.FC = () => {
     swapAbortRef.current.aborted = true;
     swapAbortRef.current = { aborted: false };
 
-    setNext(targetPlaylist);
+    setNextPl(targetPlaylist);
     setNextReady(false);
 
     (async () => {
@@ -248,7 +252,7 @@ const HomeScreen: React.FC = () => {
         setCurrent(targetPlaylist);
         currentHash.current = targetHash;
         setIsSwapping(false);
-        setNext(null);
+        setNextPl(null);
         setNextReady(false);
       }, 250);
     })();
@@ -276,7 +280,6 @@ const HomeScreen: React.FC = () => {
   ) => {
     const sid = overrideScheduleId ?? latest.current.scheduleId ?? null;
 
-    // ✅ log فقط عند محاولة الـrefresh
     console.log("[Reverb] 🔄 quietRefresh (by event)", {
       screenId,
       scheduleId: sid,
@@ -297,7 +300,6 @@ const HomeScreen: React.FC = () => {
     }
   };
 
-
   // Server push — refresh + log ONLY when events are received
   useEffect(() => {
     if (!screenId) return;
@@ -312,7 +314,6 @@ const HomeScreen: React.FC = () => {
           latest.current.scheduleId ??
           null) as number | string | null;
 
-        // ✅ log فقط عند استقبال event
         console.log("[Reverb] 📩 Event", {
           label,
           channelName,
@@ -324,7 +325,6 @@ const HomeScreen: React.FC = () => {
           persistAuthTokenFromEvent?.(payload);
         } catch {}
 
-        // ⬅ هنا نعمل الـrefresh
         void quietRefresh(sid);
       };
 
@@ -336,14 +336,10 @@ const HomeScreen: React.FC = () => {
         channel.stopListening(".ScheduleUpdate");
         channel.stopListening(".PlaylistReload");
         echo.leave(channelName);
-      } catch {
-        // no logs هنا
-      }
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, quietRefreshAll]);
-
-
 
   // Save child after loop
   useEffect(() => {
@@ -387,7 +383,6 @@ const HomeScreen: React.FC = () => {
     })();
   }, [isOnline, netMode, activeScheduleId]);
 
-  // Prewarm قبل الجدولة القادمة
   const prewarmTimerRef = useRef<number | null>(null);
   const stopHeadlessRef = useRef<() => void>(() => {});
 
@@ -423,7 +418,6 @@ const HomeScreen: React.FC = () => {
     };
   }, [nextStartDelayMs, upcomingPlaylist]);
 
-  // Headless warm عند تغيير target بدون جدولة
   useEffect(() => {
     if (typeof nextStartDelayMs === "number" && upcomingPlaylist) return;
 
@@ -445,7 +439,6 @@ const HomeScreen: React.FC = () => {
     };
   }, [targetPlaylist, nextStartDelayMs, upcomingPlaylist]);
 
-  // Idle full prefetch لما الظروف ممتازة
   useEffect(() => {
     if (!hasSlides(current)) return;
     if (netMode !== "ONLINE_GOOD") return;
@@ -453,8 +446,6 @@ const HomeScreen: React.FC = () => {
     const cancel = prefetchWholePlaylist(current as any);
     return () => cancel();
   }, [current, netMode, nextReady, isSwapping]);
-
-  // UI
 
   if (!screenId) {
     return (
@@ -472,7 +463,8 @@ const HomeScreen: React.FC = () => {
     );
   }
 
-  const noRenderable = !hasSlides(current) && (!hasSlides(next) || !nextReady);
+  const noRenderable =
+    !hasSlides(current) && (!hasSlides(nextPl) || !nextReady);
 
   return (
     <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
@@ -483,12 +475,13 @@ const HomeScreen: React.FC = () => {
             playlist={current as PlaylistT}
             screenId={screenId}
             scheduleId={activeScheduleId}
+            childStartTime={childStartTime}
             onRequestRefetch={() => void quietRefresh(null)}
           />
         </div>
       )}
 
-      {hasSlides(next) && (
+      {hasSlides(nextPl) && (
         <div
           className={classNames(
             "absolute inset-0 transition-opacity duration-300",
@@ -496,10 +489,11 @@ const HomeScreen: React.FC = () => {
           )}
         >
           <SmartPlayer
-            key={`next-${hashPlaylist(next as any)}`}
-            playlist={next as PlaylistT}
+            key={`next-${hashPlaylist(nextPl as any)}`}
+            playlist={nextPl as PlaylistT}
             screenId={screenId}
             scheduleId={activeScheduleId}
+            childStartTime={childStartTime}
             onRequestRefetch={() => void quietRefresh(null)}
           />
         </div>

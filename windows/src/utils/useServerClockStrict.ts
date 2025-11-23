@@ -27,7 +27,12 @@ const DEBUG = true;
 
 // مزامنة كل ساعة
 const resyncEveryMs = HOUR;
-const maxRttMsForTrust = 1200;
+
+// 🔽 خفّضنا حدّ RTT المقبول لزيادة الدقة
+// كان 1200ms → الآن 800ms (بتقدر تنزلها لـ 600 إذا الشبكة سريعة ومستقرة)
+const maxRttMsForTrust = 800;
+
+// لو الانحراف أقل من هيك منكمّل على offset القديم بدون rebase
 const driftThresholdSec = 0.3;
 
 /* ---------- Helpers ---------- */
@@ -125,8 +130,15 @@ function notifySubscribers() {
   });
 }
 
+/**
+ * أخذ عينة واحدة من السيرفر (نمط NTP مبسّط):
+ * - t0_perf/t3_perf من performance.now() بدقة عالية (جزء من ms)
+ * - نحسب rttMs من الفرق بينهم
+ * - لو RTT عالي (أكتر من maxRttMsForTrust) منطنّش العيّنة
+ */
 async function takeOneSampleNtp(): Promise<EngineState | null> {
   try {
+    // وقت الإرسال
     const t0_perf = performance.now();
     const t0_epoch = Date.now();
 
@@ -142,9 +154,27 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       },
     });
 
+    // وقت الاستقبال
     const t3_perf = performance.now();
     const t3_epoch = Date.now();
+
+    // RTT الحقيقي من لحظة الإرسال للاستقبال بدقة عالية
     const rttMs = t3_perf - t0_perf;
+
+    // 🔍 لوغ RTT (جاهز للتشغيل بمجرد إزالة التعليقات)
+    if (DEBUG) {
+      const g = group("RTT_SAMPLE");
+      // g.log({
+      //   sentAt_epoch: t0_epoch,
+      //   recvAt_epoch: t3_epoch,
+      //   diffEpochMs: t3_epoch - t0_epoch,
+      //   sentAt_perf: t0_perf.toFixed(3),
+      //   recvAt_perf: t3_perf.toFixed(3),
+      //   rttMs: rttMs.toFixed(3),
+      //   maxRttMsForTrust,
+      // });
+      // g.end();
+    }
 
     if (!resp.ok) {
       const g = group("SAMPLE_HTTP_FAIL");
@@ -185,13 +215,19 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       serverSec = clampDay(baseServerSec + deltaSec);
     }
 
+    // لو RTT عالي → ما منثق بهالعينة
     if (rttMs > maxRttMsForTrust) {
       const g = group("SAMPLE_SKIP_BAD_RTT");
-      // g.log({ rttMs: rttMs.toFixed(1), reason: "RTT too high" });
+      // g.log({
+      //   rttMs: rttMs.toFixed(3),
+      //   maxRttMsForTrust,
+      //   reason: "RTT too high → skip sample",
+      // });
       // g.end();
       return null;
     }
 
+    // perfRefDaySec: ثواني اليوم محسوبة من performance.now()
     const perfRefDaySec = clampDay(t3_perf / 1000);
     const offsetSec = serverSec - perfRefDaySec;
 
@@ -208,7 +244,7 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
     //   tz,
     //   server_time: json.server_time,
     //   server_epoch_ms: json.server_epoch_ms,
-    //   rttMs: rttMs.toFixed(1),
+    //   rttMs: rttMs.toFixed(3),
     //   serverSec: serverSec.toFixed(3),
     //   perfRef: t3_perf.toFixed(1),
     //   perfRefDaySec: perfRefDaySec.toFixed(3),
@@ -255,16 +291,18 @@ async function singleSync(label: string) {
   }
 
   const g = group(`${label}_APPLY`);
-  // g.log({
-  //   tz: engineState.tz,
-  //   nowHHMMSS: toHHMMSS(
-  //     clampDay(engineState.anchorServerSec) // just for log
-  //   ),
-  //   offsetSec: engineState.offsetSec.toFixed(6),
-  //   lastDriftSec: engineState.lastDriftSec.toFixed(3),
-  //   lastRttMs: engineState.lastRttMs.toFixed(1),
-  //   syncCount: engineState.syncCount,
-  // });
+  // if (engineState) {
+  //   g.log({
+  //     tz: engineState.tz,
+  //     nowHHMMSS: toHHMMSS(
+  //       clampDay(engineState.anchorServerSec) // just for log
+  //     ),
+  //     offsetSec: engineState.offsetSec.toFixed(6),
+  //     lastDriftSec: engineState.lastDriftSec.toFixed(3),
+  //     lastRttMs: engineState.lastRttMs.toFixed(3),
+  //     syncCount: engineState.syncCount,
+  //   });
+  // }
   // g.end();
 
   notifySubscribers();
@@ -349,7 +387,7 @@ export function useServerClockStrict() {
             //     secs: s.toFixed(3),
             //     note: "using local fallback (no server sync yet)",
             //   });
-            //   // g.end();
+            //   g.end();
             // }
 
             return s;

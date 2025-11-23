@@ -20,6 +20,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import GridLayout from "./GridLayout";
 import { currentNetMode, type NetMode } from "../../../utils/netHealth";
 import PlaylistDebugPanel from "./PlaylistDebugPanel";
+import { useSlideLogic } from "../hooks/useSlideLogic";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 
@@ -29,6 +30,8 @@ type Props = {
   screenId?: string | number;
   scheduleId?: string | number;
   onRequestRefetch?: () => void;
+  /** بداية child schedule من السيرفر "HH:mm:ss" (لو موجودة نفعّل sync المنطقي) */
+  childStartTime?: string | null;
 };
 
 /** ينتظر أول فريم لفيديو معيّن (أو canplay/playing) بمهلة محددة — للـoverlay فقط */
@@ -78,9 +81,7 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
 
     timeoutId = window.setTimeout(finish, timeoutMs);
 
-    const rVFC = (vid as any).requestVideoFrameCallback?.(
-      () => finish()
-    );
+    const rVFC = (vid as any).requestVideoFrameCallback?.(() => finish());
     cbId = (typeof rVFC === "number" ? rVFC : null) as number | null;
 
     vid.addEventListener("canplay", onCanPlay, { once: true });
@@ -109,6 +110,7 @@ export default function PlaylistPlayer({
   screenId,
   scheduleId,
   onRequestRefetch,
+  childStartTime,
 }: Props) {
   const qc = useQueryClient();
 
@@ -122,6 +124,9 @@ export default function PlaylistPlayer({
 
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const swiperRef = useRef<SwiperClass | null>(null);
+
+  // 🔁 منطق السيرفر: أي slide لازم تكون الآن؟ وكم مرق عليها؟
+  const slideLogic = useSlideLogic(slides as any, childStartTime);
 
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
   useEffect(() => {
@@ -138,21 +143,25 @@ export default function PlaylistPlayer({
 
   const [showOverlay, setShowOverlay] = useState(false);
 
-  // ⏱️ عدّ وقت الشريحة الحالية (بالثواني) — مبني فقط على duration
-  const [slideElapsed, setSlideElapsed] = useState(0);
+  // ⏱️ عدّ وقت محلي للشريحة (لما ما يكون في childStartTime)
+  const [localSlideElapsed, setLocalSlideElapsed] = useState(0);
 
-  // كلما تغيّرت الشريحة نعيد عدّ الوقت من الصفر
   useEffect(() => {
     const start = performance.now();
-    setSlideElapsed(0);
+    setLocalSlideElapsed(0);
 
     const id = window.setInterval(() => {
       const now = performance.now();
-      setSlideElapsed((now - start) / 1000);
-    }, 100); // تحديث كل 100ms
+      setLocalSlideElapsed((now - start) / 1000);
+    }, 100);
 
     return () => window.clearInterval(id);
   }, [activeIndex]);
+
+  // لو في sync منطقي: استخدم offsetInSlide من السيرفر بدل المحلي
+  const slideElapsed = slideLogic.enabled
+    ? slideLogic.offsetInSlide
+    : localSlideElapsed;
 
   // حُرّاس مبسّطين للفيديو (بدون أي تأثير على التايمر)
   function attachVideoGuards(videoEl: HTMLVideoElement) {
@@ -160,7 +169,7 @@ export default function PlaylistPlayer({
     if (prev) prev();
 
     const cleanup = () => {
-      // ممكن تضيف logs لاحقًا
+      // مساحة للـlogs لو حبيت بعدين
     };
 
     videoGuardsCleanup.current.set(videoEl, cleanup);
@@ -174,6 +183,18 @@ export default function PlaylistPlayer({
     swiperRef.current?.slideTo(target);
   };
   const next = () => slideTo(activeIndex + 1);
+
+  // 🔄 sync مع منطق السيرفر: لو slideLogic مفعّل وعدّل index → صحّح Swiper فورًا
+  useEffect(() => {
+    if (!slideLogic.enabled) return;
+    const idx = slideLogic.slideIndex;
+    if (!Number.isFinite(idx)) return;
+    if (!slides.length) return;
+    if (idx === activeIndex) return;
+
+    swiperRef.current?.slideTo(idx, 0);
+    setActiveIndex(idx);
+  }, [slideLogic.enabled, slideLogic.slideIndex, slides.length, activeIndex]);
 
   // external "skip once" event
   useEffect(() => {
@@ -213,7 +234,7 @@ export default function PlaylistPlayer({
     };
   }, [activeIndex, slides, netMode]);
 
-  // 🔁 تشغيل الشريحة الفعّالة + التايمر المبني فقط على مدة الشريحة
+  // 🔁 تشغيل الشريحة الفعّالة
   useEffect(() => {
     const slide = slides[activeIndex] as PlaylistSlide | undefined;
     if (!slide) return;
@@ -244,7 +265,6 @@ export default function PlaylistPlayer({
       } catch {}
     });
 
-    // ✅ التبديل للشرائح مبني فقط على slide.duration
     const hasDuration =
       Number.isFinite(slide.duration) && (slide.duration as number) > 0;
     if (!hasDuration) {
@@ -254,14 +274,19 @@ export default function PlaylistPlayer({
 
     const durationMs = (slide.duration as number) * 1000;
 
-    // ⏱️ لا علاقة للفيديو / buffering / pause بهذا التايمر
+    // ✅ لو في childStartTime → لا نستخدم setTimeout محلي، السيرفر يمشي كل شي
+    if (slideLogic.enabled) {
+      return;
+    }
+
+    // ⏱️ بلايليست default (بدون schedule) → setTimeout طبيعي
     const t = window.setTimeout(next, durationMs);
 
     return () => {
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, slides]);
+  }, [activeIndex, slides, slideLogic.enabled]);
 
   // تسجيل الفيديوهات فور دخولها DOM
   const registerVideo = (slideId: number, el: HTMLVideoElement | null) => {
