@@ -75,10 +75,10 @@ export function useResolvedPlaylist(screenId?: string) {
       return { active: undefined, next: null };
     }
 
-    // if (!clock.isReady()) {
-    //   // ما في server time جاهز → نعتبر ما في active schedule
-    //   return { active: undefined, next: null };
-    // }
+    if (!clock.isReady()) {
+      // ما في server time جاهز → نعتبر ما في active schedule
+      return { active: undefined, next: null };
+    }
 
     const nowSec = clock.nowSecs();
     const res = resolveActiveAndNext(items, nowSec);

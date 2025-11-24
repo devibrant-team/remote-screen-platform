@@ -46,10 +46,10 @@ export function useSlideLogic(
 
     // 🎬 default playlist:
     // ممنوع نستخدم وقت جهاز كـ "ثواني اليوم" قبل ما يجهز السيرفر
-    // if (!clock.isReady()) {
-    //   setBaseStartSec(null); // نخلي المنطق disabled → الـ Player يستخدم التايمر المحلي
-    //   return;
-    // }
+    if (!clock.isReady()) {
+      setBaseStartSec(null); // نخلي المنطق disabled → الـ Player يستخدم التايمر المحلي
+      return;
+    }
 
     setBaseStartSec((prev) => {
       if (prev != null) return prev;
