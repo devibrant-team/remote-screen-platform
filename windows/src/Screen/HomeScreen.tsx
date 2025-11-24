@@ -208,12 +208,11 @@ const HomeScreen: React.FC = () => {
     return target || null;
   }, [decision.playlist, (decision as any)?.source, cachedDefault]);
 
-  // 🔁 childStartTime فقط لو القرار الحالي من نوع child
+  // أي Playlist ضمن Schedule فعّال → امش على start_time تبع الـ schedule
   const childStartTime: string | null = useMemo(() => {
-    if ((decision as any)?.source !== "child") return null;
-    // active هو ParentScheduleItem
+    if (!active) return null;
     return (active as any)?.start_time ?? null;
-  }, [decision, active]);
+  }, [active]);
 
   // -------- Double Buffering --------
   const [current, setCurrent] = useState<PlaylistT | null>(
@@ -275,9 +274,7 @@ const HomeScreen: React.FC = () => {
     setNowPlaying(source, current);
   }, [current, decision.playlist, (decision as any).source]);
 
-  const quietRefresh = async (
-    overrideScheduleId?: number | string | null
-  ) => {
+  const quietRefresh = async (overrideScheduleId?: number | string | null) => {
     const sid = overrideScheduleId ?? latest.current.scheduleId ?? null;
 
     console.log("[Reverb] 🔄 quietRefresh (by event)", {
@@ -307,26 +304,25 @@ const HomeScreen: React.FC = () => {
     const channelName = `screens.${screenId}`;
     const channel = echo.channel(channelName);
 
-    const handleEvent =
-      (label: string) => (payload: ScheduleUpdatePayload) => {
-        const sid = (payload?.scheduleId ??
-          payload?.schedule_id ??
-          latest.current.scheduleId ??
-          null) as number | string | null;
+    const handleEvent = (label: string) => (payload: ScheduleUpdatePayload) => {
+      const sid = (payload?.scheduleId ??
+        payload?.schedule_id ??
+        latest.current.scheduleId ??
+        null) as number | string | null;
 
-        console.log("[Reverb] 📩 Event", {
-          label,
-          channelName,
-          screenId,
-          scheduleId: sid,
-        });
+      console.log("[Reverb] 📩 Event", {
+        label,
+        channelName,
+        screenId,
+        scheduleId: sid,
+      });
 
-        try {
-          persistAuthTokenFromEvent?.(payload);
-        } catch {}
+      try {
+        persistAuthTokenFromEvent?.(payload);
+      } catch {}
 
-        void quietRefresh(sid);
-      };
+      void quietRefresh(sid);
+    };
 
     channel.listen(".ScheduleUpdate", handleEvent("ScheduleUpdate"));
     channel.listen(".PlaylistReload", handleEvent("PlaylistReload"));
@@ -476,6 +472,7 @@ const HomeScreen: React.FC = () => {
             screenId={screenId}
             scheduleId={activeScheduleId}
             childStartTime={childStartTime}
+            activeSchedule={active} // 👈 أضف هذه
             onRequestRefetch={() => void quietRefresh(null)}
           />
         </div>
@@ -494,6 +491,7 @@ const HomeScreen: React.FC = () => {
             screenId={screenId}
             scheduleId={activeScheduleId}
             childStartTime={childStartTime}
+            activeSchedule={active} // 👈 نفس الشي
             onRequestRefetch={() => void quietRefresh(null)}
           />
         </div>

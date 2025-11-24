@@ -23,12 +23,18 @@ export function useTimedSchedule(screenId?: string) {
   );
   const [next, setNext] = useState<ParentScheduleItem | null>(null);
 
-  // 🔹 إعادة حساب مباشرة أول ما تجي البيانات أو تتغيّر
+  // 🔹 إعادة حساب أولية: فقط لما تكون البيانات جاهزة والساعة جاهزة من السيرفر
   useEffect(() => {
     if (!day || items.length === 0) {
       setActiveScheduleId(undefined);
       setActive(undefined);
       setNext(null);
+      return;
+    }
+
+    // ❗ لو السيرفر مش جاهز → ممنوع نعتمد على وقت الجهاز
+    if (!clock.isReady()) {
+      // ما نغيّر الـ state الحالية، بس نخليها مثل ما هي لحد ما السيرفر يجهز
       return;
     }
 
@@ -39,7 +45,6 @@ export function useTimedSchedule(screenId?: string) {
     setNext(n);
     setActiveScheduleId(pickScheduleId(a) ?? undefined);
 
-    // Debug اختياري
     // eslint-disable-next-line no-console
     console.log("[SCHEDULE_DEBUG] useTimedSchedule(init)", {
       day,
@@ -54,16 +59,18 @@ export function useTimedSchedule(screenId?: string) {
     });
   }, [day, items, clock]);
 
-  // 🔹 Interval كل ثانية: يمشي مع ساعة السيرفر ويحدّث الـ active على الثانية تقريباً
+  // 🔹 Interval كل ثانية: يمشي مع ساعة السيرفر ويحدّث الـ active على الثانية
   useEffect(() => {
     if (!day || items.length === 0) return;
 
     const id = setInterval(() => {
+      // لو ما في server time جاهز → ما نعمل ولا شي
+      if (!clock.isReady()) return;
+
       const nowSec = clock.nowSecs();
       const { active: a, next: n } = resolveActiveAndNext(items, nowSec);
       const newId = pickScheduleId(a) ?? undefined;
 
-      // 🔍 Tick Debug: نشوف كل ثانية أي schedule المفروض يكون active
       console.log("[SCHEDULE_TICK]", {
         day,
         nowSec,
@@ -81,7 +88,6 @@ export function useTimedSchedule(screenId?: string) {
 
       setActiveScheduleId((oldId) => {
         if (oldId !== newId) {
-          // eslint-disable-next-line no-console
           console.log("[SCHEDULE_DEBUG] boundary hit", {
             day,
             nowSec,
@@ -91,7 +97,7 @@ export function useTimedSchedule(screenId?: string) {
         }
         return newId;
       });
-    }, 1_000); // تقدر تنزلها 500ms لو بدك دقة أعلى
+    }, 1000);
 
     return () => clearInterval(id);
   }, [day, items, clock]);

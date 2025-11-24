@@ -10,6 +10,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { registerServiceWorker } from "./swRegister";
 
+// 🟢 تغيير العنوان حسب LocalStorage
+const storedName = localStorage.getItem("screenName");
+document.title = storedName || "Windows Screen Iguana";
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -30,5 +34,5 @@ createRoot(document.getElementById("root")!).render(
     </Provider>
   </StrictMode>
 );
-registerServiceWorker();
 
+registerServiceWorker();

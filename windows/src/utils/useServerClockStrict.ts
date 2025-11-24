@@ -1,5 +1,5 @@
 // src/utils/useServerClockStrict.ts
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { TimeClockApi } from "../Api/Api";
 
 type ServerReply = {
@@ -25,17 +25,17 @@ const HOUR = 3600 * SEC;
 const DAY_SEC = 86400;
 const DEBUG = true;
 
-// مزامنة كل ساعة
-const resyncEveryMs = HOUR;
+// 🔁 مزامنة كل 10 دقائق (بعد ما يصير في server time)
+const resyncEveryMs = 10 * 60 * 1000;
 
-// 🔽 خفّضنا حدّ RTT المقبول لزيادة الدقة
-// كان 1200ms → الآن 800ms (بتقدر تنزلها لـ 600 إذا الشبكة سريعة ومستقرة)
-const maxRttMsForTrust = 800;
+// 🔽 حدّ RTT المقبول
+const maxRttMsForTrust = 400;
 
 // لو الانحراف أقل من هيك منكمّل على offset القديم بدون rebase
-const driftThresholdSec = 0.3;
+const driftThresholdSec = 0.2;
 
 /* ---------- Helpers ---------- */
+
 const clampDay = (s: number) => ((s % DAY_SEC) + DAY_SEC) % DAY_SEC;
 
 function toSecs(hms: string) {
@@ -93,7 +93,7 @@ function epochMsToDaySecs(epochMs: number, tz?: string | null): number {
       return toSecs(`${h}:${m}:${s}`);
     }
   } catch {
-    // fallback لو Intl/timezone عملت مشكلة
+    // fallback لو Intl/timezone عملت مشكلة – بس للـ conversion مش للـ source
   }
 
   const hh = d.getHours();
@@ -120,6 +120,18 @@ let engineState: EngineState | null = null;
 let engineStarted = false;
 const subscribers = new Set<() => void>();
 
+// 🕒 وقت بداية محاولة الـ sync مع السيرفر
+let engineStartEpoch: number | null = null;
+
+// 🟡 عشان ما نكرر الـ alert تبع "ما في وقت"
+let noServerTimeAlertShown = false;
+
+// ✅ عشان ما نكرر Alert "رجع الوقت يشتغل"
+let serverReadyAlertShown = false;
+
+// 🔒 عشان ما يصير أكتر من طلب sync بنفس الوقت
+let syncInFlight = false;
+
 function notifySubscribers() {
   subscribers.forEach((fn) => {
     try {
@@ -130,15 +142,28 @@ function notifySubscribers() {
   });
 }
 
+// بعد 30 ثانية من بداية الـ engine، لو بعده ما في server time → alert واحد
+function ensureServerOrAlert() {
+  if (typeof window === "undefined") return;
+
+  const now = Date.now();
+
+  if (!engineStartEpoch) return;
+  if (now - engineStartEpoch < 30_000) return;
+
+  if (!engineState && !noServerTimeAlertShown) {
+    noServerTimeAlertShown = true;
+    window.alert(
+      "⚠️ لم يتم استلام الوقت من السيرفر بعد.\nلا يمكن تشغيل الجدول أو حساب الوقت بدون Server Time."
+    );
+  }
+}
+
 /**
- * أخذ عينة واحدة من السيرفر (نمط NTP مبسّط):
- * - t0_perf/t3_perf من performance.now() بدقة عالية (جزء من ms)
- * - نحسب rttMs من الفرق بينهم
- * - لو RTT عالي (أكتر من maxRttMsForTrust) منطنّش العيّنة
+ * أخذ عينة واحدة من السيرفر (نمط NTP مبسط)
  */
 async function takeOneSampleNtp(): Promise<EngineState | null> {
   try {
-    // وقت الإرسال
     const t0_perf = performance.now();
     const t0_epoch = Date.now();
 
@@ -154,22 +179,17 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       },
     });
 
-    // وقت الاستقبال
     const t3_perf = performance.now();
     const t3_epoch = Date.now();
 
-    // RTT الحقيقي من لحظة الإرسال للاستقبال بدقة عالية
     const rttMs = t3_perf - t0_perf;
 
-    // 🔍 لوغ RTT (جاهز للتشغيل بمجرد إزالة التعليقات)
     if (DEBUG) {
       const g = group("RTT_SAMPLE");
       // g.log({
       //   sentAt_epoch: t0_epoch,
       //   recvAt_epoch: t3_epoch,
       //   diffEpochMs: t3_epoch - t0_epoch,
-      //   sentAt_perf: t0_perf.toFixed(3),
-      //   recvAt_perf: t3_perf.toFixed(3),
       //   rttMs: rttMs.toFixed(3),
       //   maxRttMsForTrust,
       // });
@@ -210,12 +230,10 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       const deltaSec = (t3_epoch - json.server_epoch_ms) / 1000;
       serverSec = clampDay(baseServerSec + deltaSec);
     } else {
-      // تقريب بسيط: نضيف نص الـ RTT
       const deltaSec = rttMs / 2000;
       serverSec = clampDay(baseServerSec + deltaSec);
     }
 
-    // لو RTT عالي → ما منثق بهالعينة
     if (rttMs > maxRttMsForTrust) {
       const g = group("SAMPLE_SKIP_BAD_RTT");
       // g.log({
@@ -227,7 +245,6 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       return null;
     }
 
-    // perfRefDaySec: ثواني اليوم محسوبة من performance.now()
     const perfRefDaySec = clampDay(t3_perf / 1000);
     const offsetSec = serverSec - perfRefDaySec;
 
@@ -239,20 +256,22 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       lastDriftSec = circularDiff(serverSec, expected);
     }
 
-    const g = group("SAMPLE");
-    // g.log({
-    //   tz,
-    //   server_time: json.server_time,
-    //   server_epoch_ms: json.server_epoch_ms,
-    //   rttMs: rttMs.toFixed(3),
-    //   serverSec: serverSec.toFixed(3),
-    //   perfRef: t3_perf.toFixed(1),
-    //   perfRefDaySec: perfRefDaySec.toFixed(3),
-    //   offsetSec: offsetSec.toFixed(6),
-    //   driftSec: lastDriftSec.toFixed(3),
-    //   syncCount: (prev?.syncCount ?? 0) + 1,
-    // });
-    // g.end();
+    if (DEBUG) {
+      const g = group("SAMPLE");
+      // g.log({
+      //   tz,
+      //   server_time: json.server_time,
+      //   server_epoch_ms: json.server_epoch_ms,
+      //   rttMs: rttMs.toFixed(3),
+      //   serverSec: serverSec.toFixed(3),
+      //   perfRef: t3_perf.toFixed(1),
+      //   perfRefDaySec: perfRefDaySec.toFixed(3),
+      //   offsetSec: offsetSec.toFixed(6),
+      //   driftSec: lastDriftSec.toFixed(3),
+      //   syncCount: (prev?.syncCount ?? 0) + 1,
+      // });
+      // g.end();
+    }
 
     return {
       tz,
@@ -272,11 +291,33 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
   }
 }
 
-async function singleSync(label: string) {
-  const sample = await takeOneSampleNtp();
-  if (!sample) return;
+/**
+ * نأخذ أفضل عيّنة من N محاولات (أقل RTT)
+ */
+async function bestOfNSamples(n: number): Promise<EngineState | null> {
+  const results: EngineState[] = [];
 
-  // لا نعمل rebase إذا الانحراف صغير
+  for (let i = 0; i < n; i++) {
+    const s = await takeOneSampleNtp();
+    if (s) results.push(s);
+  }
+
+  if (!results.length) return null;
+
+  results.sort((a, b) => a.lastRttMs - b.lastRttMs);
+  return results[0];
+}
+
+async function singleSync(label: string) {
+  const sample = await bestOfNSamples(3);
+  if (!sample) {
+    // ما في sample مقبولة → منظل بلا serverTime
+    notifySubscribers();
+    return;
+  }
+
+  const wasReady = !!engineState && engineState.syncCount > 0;
+
   if (engineState && sample.lastDriftSec <= driftThresholdSec) {
     engineState = {
       ...engineState,
@@ -290,59 +331,86 @@ async function singleSync(label: string) {
     engineState = sample;
   }
 
-  const g = group(`${label}_APPLY`);
-  // if (engineState) {
-  //   g.log({
-  //     tz: engineState.tz,
-  //     nowHHMMSS: toHHMMSS(
-  //       clampDay(engineState.anchorServerSec) // just for log
-  //     ),
-  //     offsetSec: engineState.offsetSec.toFixed(6),
-  //     lastDriftSec: engineState.lastDriftSec.toFixed(3),
-  //     lastRttMs: engineState.lastRttMs.toFixed(3),
-  //     syncCount: engineState.syncCount,
-  //   });
-  // }
-  // g.end();
+  const isReadyNow = !!engineState && engineState.syncCount > 0;
+
+  if (!wasReady && isReadyNow && typeof window !== "undefined" && !serverReadyAlertShown) {
+    serverReadyAlertShown = true;
+    window.alert(
+      "✅ تم استلام الوقت من السيرفر.\nالآن يمكن تشغيل الجدول وحساب التوقيت بناءً على Server Time."
+    );
+  }
+
+  if (DEBUG && engineState) {
+    const g = group(`${label}_APPLY`);
+    // g.log({
+    //   tz: engineState.tz,
+    //   nowHHMMSS: toHHMMSS(clampDay(engineState.anchorServerSec)),
+    //   offsetSec: engineState.offsetSec.toFixed(6),
+    //   lastDriftSec: engineState.lastDriftSec.toFixed(3),
+    //   lastRttMs: engineState.lastRttMs.toFixed(3),
+    //   syncCount: engineState.syncCount,
+    // });
+    // g.end();
+  }
 
   notifySubscribers();
+}
+
+// 🔒 wrapper يمنع تداخل syncs
+async function guardedSync(label: string) {
+  if (syncInFlight) return;
+  syncInFlight = true;
+  try {
+    await singleSync(label);
+  } finally {
+    syncInFlight = false;
+  }
 }
 
 function ensureEngineStarted() {
   if (engineStarted) return;
   engineStarted = true;
 
-  // أول sync عند التشغيل
-  void singleSync("INIT");
+  engineStartEpoch = Date.now();
 
-  // ثم كل ساعة
+  // أول محاولة sync
+  void guardedSync("INIT");
+
+  // 🔁 كل 30 ثانية:
+  // - لو بعده ما في Server Time → نعمل alert check + نعيد طلب الوقت من السيرفر
+  if (typeof window !== "undefined") {
+    setInterval(() => {
+      if (!engineState || engineState.syncCount <= 0) {
+        ensureServerOrAlert();
+        void guardedSync("RETRY");
+      }
+    }, 30_000);
+  }
+
+  // ⏰ مزامنة دورية كل 10 دقائق *بعد* ما يكون عندنا وقت جاهز
   setInterval(() => {
-    void singleSync("PERIODIC");
+    if (engineState && engineState.syncCount > 0) {
+      void guardedSync("PERIODIC");
+    }
   }, resyncEveryMs);
 
-  // عند رجوع الاتصال
-  window.addEventListener("online", () => {
-    void singleSync("ONLINE");
-  });
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", () => {
+      void guardedSync("ONLINE");
+    });
 
-  // عند رجوع التبويب للفوكس
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      void singleSync("VISIBLE");
-    }
-  });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        void guardedSync("VISIBLE");
+      }
+    });
+  }
 }
 
 /* ---------- Hook ---------- */
 
 export function useServerClockStrict() {
   const [, forceRender] = useState(0);
-
-  // fallback محلي للثواني قبل أول sync
-  const fallbackRef = useRef<{
-    perfRef: number;
-    daySecRef: number;
-  } | null>(null);
 
   useEffect(() => {
     ensureEngineStarted();
@@ -357,81 +425,39 @@ export function useServerClockStrict() {
     () => {
       return {
         isReady(): boolean {
-          return !!engineState;
+          return !!engineState && engineState.syncCount > 0;
         },
 
+        // ❗ الوقت فقط من السيرفر
+        // لو ما في server time → نعمل alert check ونرجّع 0 dummy
         nowSecs(): number {
           const st = engineState;
 
-          // قبل أول sync: fallback محلي
-          if (!st) {
-            if (!fallbackRef.current) {
-              const perfRef = performance.now();
-              const localDaySec = clampDay(
-                epochMsToDaySecs(Date.now(), undefined)
-              );
-              fallbackRef.current = {
-                perfRef,
-                daySecRef: localDaySec,
-              };
-            }
-
-            const perfNow = performance.now();
-            const deltaSec = (perfNow - fallbackRef.current.perfRef) / 1000;
-            const s = clampDay(fallbackRef.current.daySecRef + deltaSec);
-
-            // if (DEBUG) {
-            //   const g = group("NOW_FALLBACK");
-            //   g.log({
-            //     nowHHMMSS: toHHMMSS(s),
-            //     secs: s.toFixed(3),
-            //     note: "using local fallback (no server sync yet)",
-            //   });
-            //   g.end();
-            // }
-
-            return s;
+          if (!st || st.syncCount <= 0) {
+            ensureServerOrAlert();
+            return 0;
           }
 
           const perfNow = performance.now();
           const perfNowDaySec = clampDay(perfNow / 1000);
           const s = clampDay(perfNowDaySec + st.offsetSec);
-
-          // if (DEBUG) {
-          //   const g = group("NOW");
-          //   g.log({
-          //     nowHHMMSS: toHHMMSS(s),
-          //     secs: s.toFixed(3),
-          //     perfNow: perfNow.toFixed(1),
-          //     perfNowDaySec: perfNowDaySec.toFixed(3),
-          //     offsetSec: st.offsetSec.toFixed(6),
-          //   });
-          //   g.end();
-          // }
-
           return s;
         },
 
+        // msUntil مبني فقط على وقت السيرفر
         msUntil(hms?: string | null): number | undefined {
           if (!hms) return undefined;
+
+          if (!engineState || engineState.syncCount <= 0) {
+            ensureServerOrAlert();
+            return undefined;
+          }
+
           const target = clampDay(toSecs(hms));
           const now = this.nowSecs();
           let delta = target - now;
           if (delta < 0) delta = 0;
           const ms = Math.floor(delta * 1000);
-
-          // if (DEBUG) {
-          //   const g = group("MS_UNTIL");
-          //   g.log({
-          //     target,
-          //     targetHHMMSS: hms,
-          //     now: now.toFixed(3),
-          //     nowHHMMSS: toHHMMSS(now),
-          //     msUntil: ms,
-          //   });
-          //   g.end();
-          // }
-
           return ms;
         },
 
@@ -455,11 +481,15 @@ export function useServerClockStrict() {
           return engineState?.syncCount ?? 0;
         },
 
+        source(): "server" | "none" {
+          return this.isReady() ? "server" : "none";
+        },
+
         debugSnapshot() {
           const st = engineState;
           const g = group("SNAPSHOT");
           if (!st) {
-            // g.log({ note: "no sync yet (might be using fallback)" });
+            // g.log({ note: "no server time yet" });
             // g.end();
             return;
           }
@@ -480,9 +510,7 @@ export function useServerClockStrict() {
         },
       };
     },
-    [
-      /* rerender trigger */
-    ]
+    []
   );
 
   return api;

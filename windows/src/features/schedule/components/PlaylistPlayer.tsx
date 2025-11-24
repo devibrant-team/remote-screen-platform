@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChildPlaylistResponse,
   PlaylistSlide,
+  ParentScheduleItem,
 } from "../../../types/schedule";
 import { Swiper, SwiperSlide } from "swiper/react";
 import { EffectFade } from "swiper/modules";
@@ -21,6 +22,7 @@ import GridLayout from "./GridLayout";
 import { currentNetMode, type NetMode } from "../../../utils/netHealth";
 import PlaylistDebugPanel from "./PlaylistDebugPanel";
 import { useSlideLogic } from "../hooks/useSlideLogic";
+import { useSchedulePlaylistTimeline } from "../hooks/useSchedulePlaylistTimeline";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 
@@ -32,6 +34,7 @@ type Props = {
   onRequestRefetch?: () => void;
   /** بداية child schedule من السيرفر "HH:mm:ss" (لو موجودة نفعّل sync المنطقي) */
   childStartTime?: string | null;
+  activeSchedule?: ParentScheduleItem;
 };
 
 /** ينتظر أول فريم لفيديو معيّن (أو canplay/playing) بمهلة محددة — للـoverlay فقط */
@@ -111,6 +114,7 @@ export default function PlaylistPlayer({
   scheduleId,
   onRequestRefetch,
   childStartTime,
+  activeSchedule,
 }: Props) {
   const qc = useQueryClient();
 
@@ -125,8 +129,20 @@ export default function PlaylistPlayer({
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const swiperRef = useRef<SwiperClass | null>(null);
 
-  // 🔁 منطق السيرفر: أي slide لازم تكون الآن؟ وكم مرق عليها؟
+  // ✅ حل مشكلة id: نستخدم scheduleId أو schedule.scheduleId فقط
+  const resolvedScheduleId: string | number | undefined =
+    scheduleId ?? activeSchedule?.scheduleId;
+
+  // 🔁 منطق السيرفر/الـtimeline: أي slide لازم تكون الآن؟ وكم مرق عليها؟ وكم باقي؟
   const slideLogic = useSlideLogic(slides as any, childStartTime);
+
+  // 🔁 Timeline كامل للـ schedule + playlist (loopات)
+  const scheduleTimeline = useSchedulePlaylistTimeline({
+    scheduleId: resolvedScheduleId,
+    schedule: activeSchedule,
+    slides: slides as PlaylistSlide[],
+    childStartTime: childStartTime ?? null,
+  });
 
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
   useEffect(() => {
@@ -143,7 +159,7 @@ export default function PlaylistPlayer({
 
   const [showOverlay, setShowOverlay] = useState(false);
 
-  // ⏱️ عدّ وقت محلي للشريحة (لما ما يكون في childStartTime)
+  // ⏱️ تايمر محلي فقط للـ debug (ما بيحرّك next أبداً)
   const [localSlideElapsed, setLocalSlideElapsed] = useState(0);
 
   useEffect(() => {
@@ -158,7 +174,7 @@ export default function PlaylistPlayer({
     return () => window.clearInterval(id);
   }, [activeIndex]);
 
-  // لو في sync منطقي: استخدم offsetInSlide من السيرفر بدل المحلي
+  // ⏱️ التوقيت الفعّال للشريحة
   const slideElapsed = slideLogic.enabled
     ? slideLogic.offsetInSlide
     : localSlideElapsed;
@@ -184,12 +200,13 @@ export default function PlaylistPlayer({
   };
   const next = () => slideTo(activeIndex + 1);
 
-  // 🔄 sync مع منطق السيرفر: لو slideLogic مفعّل وعدّل index → صحّح Swiper فورًا
+  // 🔄 sync مع منطق السيرفر/الـtimeline:
   useEffect(() => {
     if (!slideLogic.enabled) return;
+    if (!slides.length) return;
+
     const idx = slideLogic.slideIndex;
     if (!Number.isFinite(idx)) return;
-    if (!slides.length) return;
     if (idx === activeIndex) return;
 
     swiperRef.current?.slideTo(idx, 0);
@@ -204,7 +221,7 @@ export default function PlaylistPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, slides.length]);
 
-  // حافظ على activeIndex ضمن حدود length
+  // حافظ على activeIndex ضمن حدود length لو تغيّر عدد الشرائح فجأة
   useEffect(() => {
     if (!slides.length) return;
     if (activeIndex >= slides.length) {
@@ -234,7 +251,7 @@ export default function PlaylistPlayer({
     };
   }, [activeIndex, slides, netMode]);
 
-  // 🔁 تشغيل الشريحة الفعّالة
+  // 🔁 تشغيل الشريحة الفعّالة (فيديوهات + loop event) بدون أي تايمر next
   useEffect(() => {
     const slide = slides[activeIndex] as PlaylistSlide | undefined;
     if (!slide) return;
@@ -265,28 +282,8 @@ export default function PlaylistPlayer({
       } catch {}
     });
 
-    const hasDuration =
-      Number.isFinite(slide.duration) && (slide.duration as number) > 0;
-    if (!hasDuration) {
-      // duration = 0 أو null → الشريحة "لا نهائية" حتى أمر خارجي
-      return;
-    }
-
-    const durationMs = (slide.duration as number) * 1000;
-
-    // ✅ لو في childStartTime → لا نستخدم setTimeout محلي، السيرفر يمشي كل شي
-    if (slideLogic.enabled) {
-      return;
-    }
-
-    // ⏱️ بلايليست default (بدون schedule) → setTimeout طبيعي
-    const t = window.setTimeout(next, durationMs);
-
-    return () => {
-      window.clearTimeout(t);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, slides, slideLogic.enabled]);
+    // 🔔 مافي setTimeout هنا أبداً – الانتقال للـ slide اللي بعدها
+  }, [activeIndex, slides]);
 
   // تسجيل الفيديوهات فور دخولها DOM
   const registerVideo = (slideId: number, el: HTMLVideoElement | null) => {
@@ -322,7 +319,7 @@ export default function PlaylistPlayer({
 
   // Reverb للتحكم عن بعد
   useEffect(() => {
-    if (!screenId && !scheduleId) return;
+    if (!screenId && !resolvedScheduleId) return;
 
     const attach = (channelName: string) => {
       const channel = echo.channel(channelName);
@@ -346,7 +343,7 @@ export default function PlaylistPlayer({
             refetchType: "active",
           });
         }
-        const sid = e?.scheduleId ?? e?.schedule_id ?? scheduleId;
+        const sid = e?.scheduleId ?? e?.schedule_id ?? resolvedScheduleId;
         if (sid && screenId) {
           qc.invalidateQueries({
             queryKey: ["childPlaylist", String(sid), String(screenId)],
@@ -376,14 +373,15 @@ export default function PlaylistPlayer({
 
     const unsubs: Array<() => void | undefined> = [];
     if (screenId) unsubs.push(attach(`screens.${screenId}`));
-    if (scheduleId) unsubs.push(attach(`schedule.${scheduleId}`));
+    if (resolvedScheduleId) unsubs.push(attach(`schedule.${resolvedScheduleId}`));
 
     const off = ReverbConnection.onStatus((s) => {
       if (s === "connected") {
         unsubs.forEach((u) => u && u());
         unsubs.length = 0;
         if (screenId) unsubs.push(attach(`screens.${screenId}`));
-        if (scheduleId) unsubs.push(attach(`schedule.${scheduleId}`));
+        if (resolvedScheduleId)
+          unsubs.push(attach(`schedule.${resolvedScheduleId}`));
       }
     });
 
@@ -392,18 +390,25 @@ export default function PlaylistPlayer({
       unsubs.forEach((u) => u && u());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenId, scheduleId, activeIndex, onRequestRefetch, qc]);
+  }, [screenId, resolvedScheduleId, activeIndex, onRequestRefetch, qc]);
 
   if (!slides.length) return null;
 
   return (
     <div className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
-      {/* Debug Panel: يعرض وقت السيرفر + مدة الشريحة + كم مرق */}
+      {/* Debug Panel: يعرض وقت السيرفر + مدة الشريحة + كل تفاصيل التوقيت */}
       <PlaylistDebugPanel
         slides={slides as PlaylistSlide[]}
         activeIndex={activeIndex}
-        scheduleId={scheduleId}
+        scheduleId={resolvedScheduleId}
         slideElapsed={slideElapsed}
+        localElapsed={localSlideElapsed}
+        logicIndex={slideLogic.slideIndex}
+        logicOffset={slideLogic.offsetInSlide}
+        logicEnabled={slideLogic.enabled}
+        logicMsUntilNext={slideLogic.msUntilNextSlide}
+        childStartTime={childStartTime ?? null}
+        scheduleTimeline={scheduleTimeline}
       />
 
       {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}

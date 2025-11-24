@@ -6,13 +6,35 @@ import {
   loadLastGoodChild,
   loadLastGoodDefault,
 } from "../../../utils/playlistCache";
+import { buildPlaylistTimeline, type SchedulePlaylistTimeline } from "../../../utils/playlistTimeline";
 
 type Props = {
   slides: PlaylistSlide[];
   activeIndex: number;
   scheduleId?: string | number;
-  /** كم ثانية مرقوا على الشريحة الحالية – محسوبة من التايمر في PlaylistPlayer */
+
+  /** التوقيت الفعّال المستخدم داخل الـ Player (local أو server) */
   slideElapsed?: number;
+
+  /** التايمر المحلي داخل PlaylistPlayer (للمقارنة) */
+  localElapsed?: number;
+
+  /** index المنطقي من useSlideLogic (0-based) */
+  logicIndex?: number;
+
+  /** كم ثانية مرقت داخل الشريحة حسب useSlideLogic */
+  logicOffset?: number;
+
+  /** هل sync المنطقي مفعّل؟ */
+  logicEnabled?: boolean;
+
+  /** بداية الـ child schedule من السيرفر "HH:mm:ss" */
+  childStartTime?: string | null;
+
+  /** كم ms باقي للـ next slide حسب useSlideLogic */
+  logicMsUntilNext?: number | null;
+
+  scheduleTimeline?: SchedulePlaylistTimeline | null
 };
 
 const DAY_SEC = 86400;
@@ -21,7 +43,7 @@ function clampDay(s: number) {
   return ((s % DAY_SEC) + DAY_SEC) % DAY_SEC;
 }
 
-// ✅ HH:MM:SS.mmm
+// HH:MM:SS.mmm
 function secsToHHMMSSmmm(s: number) {
   s = clampDay(s);
   const totalInt = Math.floor(s);
@@ -86,6 +108,12 @@ const PlaylistDebugPanel: React.FC<Props> = ({
   activeIndex,
   scheduleId,
   slideElapsed = 0,
+  localElapsed = 0,
+  logicIndex = 0,
+  logicOffset = 0,
+  logicEnabled = false,
+  childStartTime = null,
+  logicMsUntilNext = null,
 }) => {
   const clock = useServerClockStrict();
 
@@ -99,20 +127,24 @@ const PlaylistDebugPanel: React.FC<Props> = ({
   );
   const [driftSec, setDriftSec] = useState<number>(() => clock.driftSec());
   const [tz, setTz] = useState<string | null>(() => clock.timezone());
+  const [rtt, setRtt] = useState<number>(() => clock.lastRttMs());
+  const [syncCount, setSyncCount] = useState<number>(() => clock.syncCount());
   const [isCached, setIsCached] = useState<boolean | null>(null);
 
   const slide = slides[activeIndex] ?? null;
+  const totalSlides = slides.length;
+
   const rawDuration =
     typeof slide?.duration === "number" && Number.isFinite(slide.duration)
       ? (slide.duration as number)
       : null;
 
-  // ⏱️ نضبط elapsed/left/progress بناءً على duration (لو موجود)
-  const { duration, elapsed, left, progress } = useMemo(() => {
+  // ⏱️ duration / elapsed / left / progress باستخدام elapsed الفعّال
+  const { duration, effectiveElapsed, left, progress } = useMemo(() => {
     if (!rawDuration || rawDuration <= 0) {
       return {
         duration: null as number | null,
-        elapsed: slideElapsed,
+        effectiveElapsed: slideElapsed,
         left: null as number | null,
         progress: null as number | null,
       };
@@ -122,7 +154,7 @@ const PlaylistDebugPanel: React.FC<Props> = ({
     const p = Math.max(0, Math.min(100, (e / rawDuration) * 100));
     return {
       duration: rawDuration,
-      elapsed: e,
+      effectiveElapsed: e,
       left: l,
       progress: p,
     };
@@ -130,7 +162,22 @@ const PlaylistDebugPanel: React.FC<Props> = ({
 
   const mediaCount = useMemo(() => countMediaInSlide(slide), [slide]);
 
-  // ⏱️ تحديث وقت السيرفر كل ثانية — نربطه مرّة واحدة فقط
+  // 🧵 Timeline كامل مبني على childStartTime + durations
+  const timeline = useMemo(() => {
+    return buildPlaylistTimeline(slides as any, childStartTime ?? undefined);
+  }, [slides, childStartTime]);
+
+  // أي صف من الـ timeline نعرضه؟ منطقي لو مفعّل، وإلا UI index
+  const timelineRow =
+    timeline &&
+    (logicEnabled
+      ? timeline.items[logicIndex] ?? timeline.items[activeIndex]
+      : timeline.items[activeIndex]);
+
+  const timelineStart = timelineRow?.startHHMMSSmmm ?? null;
+  const timelineEnd = timelineRow?.endHHMMSSmmm ?? null;
+
+  // ⏱️ تحديث وقت السيرفر وكل إحصائياته كل 500ms
   useEffect(() => {
     const id = window.setInterval(() => {
       const secs = clock.nowSecs();
@@ -138,13 +185,15 @@ const PlaylistDebugPanel: React.FC<Props> = ({
       setServerSecsRaw(secs.toFixed(3));
       setDriftSec(clock.driftSec());
       setTz(clock.timezone());
-    }, 1000);
+      setRtt(clock.lastRttMs());
+      setSyncCount(clock.syncCount());
+    }, 500);
 
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // ما نحط clock بالـ deps عشان ما ينعاد الـ effect
 
-  // 👇 فحص الكاش مرّة واحدة (أو لما scheduleId يتغيّر)
+  // 👇 فحص وجود أي كاش child/default (مرة لكل schedule)
   useEffect(() => {
     try {
       const cachedChild = loadLastGoodChild();
@@ -167,27 +216,52 @@ const PlaylistDebugPanel: React.FC<Props> = ({
     }
   }, [scheduleId]);
 
+  const syncModeLabel = logicEnabled ? "SERVER / TIMELINE" : "LOCAL / FALLBACK";
+
+  const logicSlideHuman =
+    logicEnabled && totalSlides
+      ? `${logicIndex + 1} / ${totalSlides}`
+      : logicEnabled
+      ? `${logicIndex + 1} / ?`
+      : "—";
+
+  const nextMsLabel =
+    logicEnabled && logicMsUntilNext != null
+      ? `${(logicMsUntilNext / 1000).toFixed(3)}s`
+      : "—";
+
   return (
     <div className="pointer-events-none absolute top-3 right-3 z-50">
-      <div className="bg-black/70 border border-emerald-500/40 rounded-lg px-3 py-2 text-[11px] leading-snug text-white shadow-lg min-w-[220px] space-y-1">
-        <div className="font-semibold text-xs text-emerald-300">
-          Debug · Playlist
+      <div className="bg-black/70 border border-emerald-500/40 rounded-lg px-3 py-2 text-[11px] leading-snug text-white shadow-lg min-w-[260px] space-y-1">
+        <div className="flex items-center justify-between">
+          <div className="font-semibold text-xs text-emerald-300">
+            Debug · Playlist
+          </div>
+          <div className="text-[10px] text-emerald-200">{syncModeLabel}</div>
         </div>
 
         {/* Server clock */}
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Server</span>
           <span className="font-mono">{serverTime}</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Secs</span>
           <span className="font-mono">{serverSecsRaw}</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Drift</span>
           <span className="font-mono">{driftSec.toFixed(3)}s</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">RTT</span>
+          <span className="font-mono">{rtt.toFixed(1)}ms</span>
+        </div>
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Sync count</span>
+          <span className="font-mono">{syncCount}</span>
+        </div>
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">TZ</span>
           <span className="font-mono">
             {tz ?? <span className="text-white/40">…</span>}
@@ -197,44 +271,88 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         {/* Schedule / slide info */}
         <div className="h-px bg-white/10 my-1" />
 
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Schedule</span>
           <span className="font-mono">
             {scheduleId ?? <span className="text-white/40">none</span>}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
-          <span className="text-white/60">Slide</span>
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Child start</span>
           <span className="font-mono">
-            {slides.length ? `${activeIndex + 1} / ${slides.length}` : "-"}
+            {childStartTime ?? <span className="text-white/40">none</span>}
           </span>
+        </div>
+
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Slide (UI)</span>
+          <span className="font-mono">
+            {totalSlides ? `${activeIndex + 1} / ${totalSlides}` : "-"}
+          </span>
+        </div>
+
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Slide (logic)</span>
+          <span className="font-mono">{logicSlideHuman}</span>
+        </div>
+
+        {/* Timeline start/end على السيرفر */}
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Start @server</span>
+          <span className="font-mono">
+            {timelineStart ?? <span className="text-white/40">—</span>}
+          </span>
+        </div>
+
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">End @server</span>
+          <span className="font-mono">
+            {timelineEnd ?? <span className="text-white/40">—</span>}
+          </span>
+        </div>
+
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Next slide in</span>
+          <span className="font-mono">{nextMsLabel}</span>
         </div>
 
         {/* Duration / elapsed / left / progress */}
-        <div className="flex justify-between gap-3">
+        <div className="h-px bg-white/10 my-1" />
+
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Duration</span>
           <span className="font-mono">
-            {duration ? `${duration.toFixed(0)}s` : "auto / none"}
+            {duration ? `${duration.toFixed(3)}s` : "auto / none"}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
-          <span className="text-white/60">Elapsed</span>
+        {/* Elapsed (effective / local / server) */}
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Elapsed (effective)</span>
+          <span className="font-mono">{effectiveElapsed.toFixed(3)}s</span>
+        </div>
+
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Elapsed (local)</span>
+          <span className="font-mono">{localElapsed.toFixed(3)}s</span>
+        </div>
+
+        <div className="flex  justify-between gap-3">
+          <span className="text-white/60">Elapsed (server)</span>
           <span className="font-mono">
-            {elapsed.toFixed(2)}
-            s
+            {logicEnabled ? `${logicOffset.toFixed(3)}s` : "—"}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Left</span>
           <span className="font-mono">
-            {left != null ? `${left.toFixed(2)}s` : "—"}
+            {left != null ? `${left.toFixed(3)}s` : "—"}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Progress</span>
           <span className="font-mono">
             {progress != null ? `${progress.toFixed(1)}%` : "—"}
@@ -242,13 +360,15 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         </div>
 
         {/* Media + cache */}
-        <div className="flex justify-between gap-3">
+        <div className="h-px bg-white/10 my-1" />
+
+        <div className="flex  justify-between gap-3">
           <span className="text-white/60">Media in slide</span>
           <span className="font-mono">{mediaCount}</span>
         </div>
 
         <div className="flex justify-between gap-3">
-          <span className="text-white/60">Cached</span>
+          <span className="text-white/60">Cached (any)</span>
           <span
             className={
               isCached === null

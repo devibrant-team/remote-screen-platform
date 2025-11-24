@@ -64,21 +64,23 @@ export function useResolvedPlaylist(screenId?: string) {
   useEffect(() => {
     const id = setInterval(() => {
       setTimeTick((t) => t + 1);
-    }, 1000); // كل ثانية
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 
-  // ثواني اليوم من ساعة السيرفر
-  const nowSec = clock.nowSecs();
-
-  // نحسب active + next بناءً على الوقت الحالي
+  // ثواني اليوم من ساعة السيرفر فقط
+  // (لو السيرفر مش جاهز، ممنوع نستعمل وقت جهاز → ما نحسب active/next أصلاً)
   const { active, next } = useMemo(() => {
     if (!day || items.length === 0) {
-      return {
-        active: undefined,
-        next: null,
-      };
+      return { active: undefined, next: null };
     }
+
+    if (!clock.isReady()) {
+      // ما في server time جاهز → نعتبر ما في active schedule
+      return { active: undefined, next: null };
+    }
+
+    const nowSec = clock.nowSecs();
     const res = resolveActiveAndNext(items, nowSec);
 
     // Debug optional:
@@ -90,14 +92,13 @@ export function useResolvedPlaylist(screenId?: string) {
     // });
 
     return res;
-  }, [day, items, nowSec, timeTick]); // 👈 timeTick يخليها تعيد الحساب كل ثانية
+  }, [day, items, timeTick, clock]);
 
   const activeScheduleId = pickScheduleId(active) ?? undefined;
 
   /* ── Live queries ─────────────────────────────────────────── */
   const child = useChildPlaylist(activeScheduleId, screenId);
 
-  // نقرر default بناءً على حالة الـ active + child
   const wantDefault =
     !active || child.isError || !hasSlides(child.data?.playlist);
 
@@ -136,7 +137,7 @@ export function useResolvedPlaylist(screenId?: string) {
       .catch(() => {});
   }, [activeScheduleId, screenId, qc]);
 
-  /* ── تأخيرات مبنية على ساعة السيرفر فقط (لـ prewarm/debug) ── */
+  /* ── تأخيرات مبنية على ساعة السيرفر فقط (msUntil آمنة داخل الـ hook) ── */
   const activeEndDelayMs = useMemo(() => {
     const endTime = pickStr(active, "end_time");
     return endTime ? clock.msUntil(endTime) : undefined;
@@ -162,15 +163,6 @@ export function useResolvedPlaylist(screenId?: string) {
     const liveDefault = defaultQ.data?.playlist;
 
     const hasActiveSchedule = !!active;
-
-    // Debug decision:
-    // console.log("[DECISION_DEBUG]", {
-    //   nowSec,
-    //   hasActiveSchedule,
-    //   activeId: pickScheduleId(active),
-    //   hasChildSlides: hasSlides(liveChild),
-    //   hasDefaultSlides: hasSlides(liveDefault),
-    // });
 
     // (A) ما في schedule حاليًا → default
     if (!hasActiveSchedule) {
@@ -255,26 +247,23 @@ export function useResolvedPlaylist(screenId?: string) {
     active,
     child.data?.playlist,
     defaultQ.data?.playlist,
-    nowSec,
     parent.isLoading,
     child.isError,
     defaultQ.isError,
   ]);
 
-
-
-  /* ── Prefetch نافذة مبكّرة من القرار الحالي ─────────────── */
   useEffect(() => {
     if (!hasSlides(decision.playlist)) return;
     const cancel = prefetchWindow(decision.playlist.slides, 0, 2);
     return () => cancel();
   }, [decision.playlist]);
 
-  /* ── Quiet refresh helper ────────────────────────────────── */
+  const activeScheduleIdFinal = activeScheduleId;
+
   const quietRefreshAll = async (
     overrideScheduleId?: number | string | null
   ) => {
-    const sid = overrideScheduleId ?? activeScheduleId ?? undefined;
+    const sid = overrideScheduleId ?? activeScheduleIdFinal ?? undefined;
     const parentKey = qk.parent(screenId);
     const childKey = sid != null ? qk.child(sid, screenId) : null;
     const defaultKey = qk.def(screenId);
@@ -290,7 +279,6 @@ export function useResolvedPlaylist(screenId?: string) {
     await qc.refetchQueries({ queryKey: defaultKey, type: "active" });
   };
 
-  // isLoading ما لازم يطفي الشاشة إذا معنا Playlist جاهزة
   const anyLoading = parent.isLoading || child.isLoading || defaultQ.isLoading;
   const isLoadingSafe = anyLoading && !hasSlides(decision.playlist);
 
@@ -298,7 +286,7 @@ export function useResolvedPlaylist(screenId?: string) {
     parent,
     active,
     next,
-    activeScheduleId,
+    activeScheduleId: activeScheduleIdFinal,
     decision,
     isLoading: isLoadingSafe,
     isError: parent.isError && child.isError && defaultQ.isError,

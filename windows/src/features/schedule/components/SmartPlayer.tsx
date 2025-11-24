@@ -1,6 +1,9 @@
 // src/features/schedule/components/SmartPlayer.tsx
 import React from "react";
-import type { ChildPlaylistResponse } from "../../../types/schedule";
+import type {
+  ChildPlaylistResponse,
+  ParentScheduleItem,      // 👈 أضف هذي
+} from "../../../types/schedule";
 import PlaylistPlayer from "./PlaylistPlayer";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
@@ -11,8 +14,9 @@ type Props = {
   screenId?: string | number;
   scheduleId?: string | number;
   onRequestRefetch?: () => void;
-  /** بداية الـ child schedule (server) "HH:mm:ss" - optional */
   childStartTime?: string | null;
+  /** NEW: الـ parent schedule الكامل (start_time + end_time) */
+  activeSchedule?: ParentScheduleItem;
 };
 
 const SmartPlayer: React.FC<Props> = ({
@@ -22,9 +26,8 @@ const SmartPlayer: React.FC<Props> = ({
   scheduleId,
   onRequestRefetch,
   childStartTime,
+  activeSchedule,          // 👈 استقبلها
 }) => {
-  // إذا عندك منطق إضافي (أنواع layout/interactive) ركّبه هون؛
-  // أهم شي تمرّر childStartTime إلى PlaylistPlayer.
   return (
     <PlaylistPlayer
       playlist={playlist}
@@ -33,6 +36,7 @@ const SmartPlayer: React.FC<Props> = ({
       scheduleId={scheduleId}
       onRequestRefetch={onRequestRefetch}
       childStartTime={childStartTime}
+      activeSchedule={activeSchedule}   // 👈 مرّرها للـ Player
     />
   );
 };

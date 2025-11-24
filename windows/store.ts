@@ -1,7 +1,10 @@
 import { configureStore } from "@reduxjs/toolkit";
 import app from './src/Redux/appSlice'
+import scheduleTimelineReducer from './src/Redux/scheduleTimelineSlice'
 export const store = configureStore({
-  reducer: { app },    
+  reducer: { 
+    scheduleTimeline: scheduleTimelineReducer,
+    app },    
        
   devTools: true 
 });
