@@ -291,7 +291,7 @@ const PlaylistDebugPanel: React.FC<Props> = ({
   return (
     <div className="pointer-events-none absolute top-3 right-3 z-50">
       <div className="bg-black/70 border border-emerald-500/40 rounded-lg px-3 py-2 text-[11px] leading-snug text-white shadow-lg min-w-[260px] max-w-[320px] space-y-1">
-        <div className="flex items-center justify-between">
+        <div className="flex   items-center justify-between">
           <div className="font-semibold text-xs text-emerald-300">
             Debug · Playlist
           </div>
@@ -299,27 +299,27 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         </div>
 
         {/* Server clock */}
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse   justify-between gap-3">
           <span className="text-white/60">Server</span>
           <span className="font-mono">{serverTime}</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse   justify-between gap-3">
           <span className="text-white/60">Secs</span>
           <span className="font-mono">{serverSecsRaw}</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse   justify-between gap-3">
           <span className="text-white/60">Drift</span>
           <span className="font-mono">{driftSec.toFixed(3)}s</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse   justify-between gap-3">
           <span className="text-white/60">RTT</span>
           <span className="font-mono">{rtt.toFixed(1)}ms</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Sync count</span>
           <span className="font-mono">{syncCount}</span>
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">TZ</span>
           <span className="font-mono">
             {tz ?? <span className="text-white/40">…</span>}
@@ -329,48 +329,48 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         {/* Schedule / slide info */}
         <div className="h-px bg-white/10 my-1" />
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Schedule</span>
           <span className="font-mono">
             {scheduleId ?? <span className="text-white/40">none</span>}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Child start</span>
           <span className="font-mono">
             {childStartTime ?? <span className="text-white/40">none</span>}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Slide (UI)</span>
           <span className="font-mono">
             {totalSlides ? `${activeIndex + 1} / ${totalSlides}` : "-"}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Slide (logic)</span>
           <span className="font-mono">{logicSlideHuman}</span>
         </div>
 
         {/* Timeline start/end على السيرفر للـ slide الحالية */}
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Start @server</span>
           <span className="font-mono">
             {timelineStart ?? <span className="text-white/40">—</span>}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">End @server</span>
           <span className="font-mono">
             {timelineEnd ?? <span className="text-white/40">—</span>}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Next slide in</span>
           <span className="font-mono">{nextMsLabel}</span>
         </div>
@@ -378,7 +378,7 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         {/* Duration / elapsed / left / progress */}
         <div className="h-px bg-white/10 my-1" />
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Duration</span>
           <span className="font-mono">
             {duration ? `${duration.toFixed(3)}s` : "auto / none"}
@@ -386,31 +386,31 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         </div>
 
         {/* Elapsed (effective / local / server) */}
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Elapsed (effective)</span>
           <span className="font-mono">{effectiveElapsed.toFixed(3)}s</span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Elapsed (local)</span>
           <span className="font-mono">{localElapsed.toFixed(3)}s</span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Elapsed (server)</span>
           <span className="font-mono">
             {logicEnabled ? `${logicOffset.toFixed(3)}s` : "—"}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Left</span>
           <span className="font-mono">
             {left != null ? `${left.toFixed(3)}s` : "—"}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Progress</span>
           <span className="font-mono">
             {progress != null ? `${progress.toFixed(1)}%` : "—"}
@@ -420,7 +420,7 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         {/* 🔁 معلومات عن schedule loops */}
         <div className="h-px bg-white/10 my-1" />
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Schedule start</span>
           <span className="font-mono">
             {loopInfo?.scheduleStart ??
@@ -429,14 +429,14 @@ const PlaylistDebugPanel: React.FC<Props> = ({
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Schedule end</span>
           <span className="font-mono">
             {loopInfo?.scheduleEnd ?? (scheduleTimeline ? "—" : "—")}
           </span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Playlist loops</span>
           <span className="font-mono">
             {loopInfo?.loops != null ? loopInfo.loops : "—"}
@@ -444,14 +444,14 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         </div>
 
         {loopInfo?.playlistStart && (
-          <div className="flex justify-between gap-3">
+          <div className="flex flex-row-reverse  justify-between gap-3">
             <span className="text-white/60">First loop start</span>
             <span className="font-mono">{loopInfo.playlistStart}</span>
           </div>
         )}
 
         {loopInfo?.playlistEnd && (
-          <div className="flex justify-between gap-3">
+          <div className="flex flex-row-reverse  justify-between gap-3">
             <span className="text-white/60">Last loop end</span>
             <span className="font-mono">{loopInfo.playlistEnd}</span>
           </div>
@@ -469,9 +469,9 @@ const PlaylistDebugPanel: React.FC<Props> = ({
             {slideRows.map((row) => (
               <div
                 key={row.idx}
-                className="flex justify-between gap-2 font-mono"
+                className="flex flex-row-reverse  justify-between gap-2 font-mono"
               >
-                <div className="flex flex-col text-white/70">
+                <div className="flex flex-row-reverse  flex-col text-white/70">
                   <span>
                     #{row.idx + 1}
                     {row.duration != null
@@ -495,12 +495,12 @@ const PlaylistDebugPanel: React.FC<Props> = ({
         {/* Media + cache */}
         <div className="h-px bg-white/10 my-1" />
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Media in slide</span>
           <span className="font-mono">{mediaCount}</span>
         </div>
 
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-row-reverse  justify-between gap-3">
           <span className="text-white/60">Cached (any)</span>
           <span
             className={
