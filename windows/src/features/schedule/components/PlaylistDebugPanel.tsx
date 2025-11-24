@@ -127,8 +127,8 @@ const PlaylistDebugPanel: React.FC<Props> = ({
   );
   const [driftSec, setDriftSec] = useState<number>(() => clock.driftSec());
   const [tz, setTz] = useState<string | null>(() => clock.timezone());
-  const [rtt, setRtt] = useState<number>(() => clock.lastRttMs());
-  const [syncCount, setSyncCount] = useState<number>(() => clock.syncCount());
+  // const [rtt, setRtt] = useState<number>(() => clock.lastRttMs());
+  // const [syncCount, setSyncCount] = useState<number>(() => clock.syncCount());
   const [isCached, setIsCached] = useState<boolean | null>(null);
 
   const slide = slides[activeIndex] ?? null;
@@ -185,8 +185,8 @@ const PlaylistDebugPanel: React.FC<Props> = ({
       setServerSecsRaw(secs.toFixed(3));
       setDriftSec(clock.driftSec());
       setTz(clock.timezone());
-      setRtt(clock.lastRttMs());
-      setSyncCount(clock.syncCount());
+      // setRtt(clock.lastRttMs());
+      // setSyncCount(clock.syncCount());
     }, 500);
 
     return () => window.clearInterval(id);
@@ -253,14 +253,14 @@ const PlaylistDebugPanel: React.FC<Props> = ({
           <span className="text-white/60">Drift</span>
           <span className="font-mono">{driftSec.toFixed(3)}s</span>
         </div>
-        <div className="flex  justify-between gap-3">
+        {/* <div className="flex  justify-between gap-3">
           <span className="text-white/60">RTT</span>
           <span className="font-mono">{rtt.toFixed(1)}ms</span>
         </div>
         <div className="flex  justify-between gap-3">
           <span className="text-white/60">Sync count</span>
           <span className="font-mono">{syncCount}</span>
-        </div>
+        </div> */}
         <div className="flex  justify-between gap-3">
           <span className="text-white/60">TZ</span>
           <span className="font-mono">
