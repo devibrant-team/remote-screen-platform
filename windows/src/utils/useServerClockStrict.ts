@@ -181,25 +181,10 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
 
     const t3_perf = performance.now();
     const t3_epoch = Date.now();
-
     const rttMs = t3_perf - t0_perf;
 
-    if (DEBUG) {
-      const g = group("RTT_SAMPLE");
-      // g.log({
-      //   sentAt_epoch: t0_epoch,
-      //   recvAt_epoch: t3_epoch,
-      //   diffEpochMs: t3_epoch - t0_epoch,
-      //   rttMs: rttMs.toFixed(3),
-      //   maxRttMsForTrust,
-      // });
-      // g.end();
-    }
-
     if (!resp.ok) {
-      const g = group("SAMPLE_HTTP_FAIL");
-      // g.log({ status: resp.status, statusText: resp.statusText });
-      // g.end();
+      console.error("[TimeClock] HTTP FAIL", resp.status, resp.statusText);
       return null;
     }
 
@@ -207,9 +192,23 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
     try {
       json = (await resp.json()) as ServerReply;
     } catch (e) {
-      const g = group("SAMPLE_JSON_FAIL");
-      // g.log({ error: String(e) });
-      // g.end();
+      console.error("[TimeClock] JSON FAIL", e);
+      return null;
+    }
+
+    // ❗ لو الـ API بيرجع success=false نطنّش العينة
+    if (json.success === false) {
+      console.error("[TimeClock] API says success=false");
+      return null;
+    }
+
+    // ❗❗ أهم نقطة:
+    // لو ما في server_time ولا server_epoch_ms → نرفض العينة
+    // ممنوع نعمل fallback على وقت الجهاز
+    if (!json.server_time && json.server_epoch_ms == null) {
+      console.error(
+        "[TimeClock] missing server_time and server_epoch_ms – sample ignored"
+      );
       return null;
     }
 
@@ -217,12 +216,12 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       json.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
 
     let baseServerSec: number;
-    if (json.server_time) {
-      baseServerSec = clampDay(toSecs(json.server_time));
-    } else if (json.server_epoch_ms != null) {
+    if (json.server_epoch_ms != null) {
+      // عندنا timestamp دقيق من السيرفر
       baseServerSec = clampDay(epochMsToDaySecs(json.server_epoch_ms, tz));
     } else {
-      baseServerSec = clampDay(epochMsToDaySecs(t3_epoch, tz));
+      // عندنا بس HH:MM:SS من السيرفر
+      baseServerSec = clampDay(toSecs(json.server_time!));
     }
 
     let serverSec: number;
@@ -230,18 +229,17 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       const deltaSec = (t3_epoch - json.server_epoch_ms) / 1000;
       serverSec = clampDay(baseServerSec + deltaSec);
     } else {
+      // تقريب بسيط بنص الـ RTT، بس لسا المصدر من السيرفر
       const deltaSec = rttMs / 2000;
       serverSec = clampDay(baseServerSec + deltaSec);
     }
 
     if (rttMs > maxRttMsForTrust) {
-      const g = group("SAMPLE_SKIP_BAD_RTT");
-      // g.log({
-      //   rttMs: rttMs.toFixed(3),
-      //   maxRttMsForTrust,
-      //   reason: "RTT too high → skip sample",
-      // });
-      // g.end();
+      console.warn(
+        "[TimeClock] sample skipped due to high RTT",
+        rttMs,
+        "ms"
+      );
       return null;
     }
 
@@ -256,23 +254,6 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       lastDriftSec = circularDiff(serverSec, expected);
     }
 
-    if (DEBUG) {
-      const g = group("SAMPLE");
-      // g.log({
-      //   tz,
-      //   server_time: json.server_time,
-      //   server_epoch_ms: json.server_epoch_ms,
-      //   rttMs: rttMs.toFixed(3),
-      //   serverSec: serverSec.toFixed(3),
-      //   perfRef: t3_perf.toFixed(1),
-      //   perfRefDaySec: perfRefDaySec.toFixed(3),
-      //   offsetSec: offsetSec.toFixed(6),
-      //   driftSec: lastDriftSec.toFixed(3),
-      //   syncCount: (prev?.syncCount ?? 0) + 1,
-      // });
-      // g.end();
-    }
-
     return {
       tz,
       offsetSec,
@@ -284,12 +265,11 @@ async function takeOneSampleNtp(): Promise<EngineState | null> {
       syncCount: (prev?.syncCount ?? 0) + 1,
     };
   } catch (e) {
-    const g = group("SAMPLE_EXCEPTION");
-    // g.log({ error: String(e) });
-    // g.end();
+    console.error("[TimeClock] EXCEPTION", e);
     return null;
   }
 }
+
 
 /**
  * نأخذ أفضل عيّنة من N محاولات (أقل RTT)
