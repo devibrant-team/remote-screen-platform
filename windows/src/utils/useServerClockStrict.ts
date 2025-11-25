@@ -44,12 +44,19 @@ const driftThresholdSec = 0.3;
 const clampDay = (s: number) => ((s % DAY_SEC) + DAY_SEC) % DAY_SEC;
 
 function toSecs(hms: string) {
-  const [h = "0", m = "0", s = "0"] = String(hms).split(":");
+  const [h = "0", m = "0", sPart = "0"] = String(hms).trim().split(":");
+
   const hh = Math.max(0, Math.min(23, parseInt(h) || 0));
   const mm = Math.max(0, Math.min(59, parseInt(m) || 0));
-  const ss = Math.max(0, Math.min(59, parseInt(s) || 0));
+
+  // هنا نسمح يكون فيها .mmm (مثلاً "13.301")
+  let ss = parseFloat(sPart.replace(",", ".")); // احتياط لو رجعت "13,301"
+  if (Number.isNaN(ss) || ss < 0) ss = 0;
+  if (ss > 59.999) ss = 59.999; // سقف منطقي
+
   return hh * 3600 + mm * 60 + ss;
 }
+
 
 function toHHMMSS(s: number) {
   s = clampDay(Math.floor(s));
@@ -79,6 +86,9 @@ function group(label: string) {
 function epochMsToDaySecs(epochMs: number, tz?: string | null): number {
   const d = new Date(epochMs);
 
+  // جزء الميلي ثانية ضمن الثانية (0..0.999)
+  const fracSec = ((epochMs % 1000) + 1000) % 1000 / 1000;
+
   try {
     if (tz) {
       const fmt = new Intl.DateTimeFormat("en-GB", {
@@ -98,17 +108,21 @@ function epochMsToDaySecs(epochMs: number, tz?: string | null): number {
         else if (p.type === "minute") m = p.value;
         else if (p.type === "second") s = p.value;
       }
-      return toSecs(`${h}:${m}:${s}`);
+      const base = toSecs(`${h}:${m}:${s}`); // هلق toSecs يدعم float ↑
+      return clampDay(base + fracSec);
     }
   } catch {
-    // fallback لو Intl/timezone عملت مشكلة – بس للـ conversion مش للـ source
+    // لو Intl/timezone عملت مشكلة – نستخدم fallback
   }
 
   const hh = d.getHours();
   const mm = d.getMinutes();
   const ss = d.getSeconds();
-  return hh * 3600 + mm * 60 + ss;
+  const ms = d.getMilliseconds();
+  const base = hh * 3600 + mm * 60 + ss + ms / 1000;
+  return clampDay(base);
 }
+
 
 /** فرق دائري على مستوى اليوم */
 function circularDiff(a: number, b: number): number {
