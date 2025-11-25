@@ -1,4 +1,4 @@
-// src/pages/HomeScreen.tsx (أو نفس المسار عندك)
+// src/pages/HomeScreen.tsx
 import "swiper/css";
 import "swiper/css/effect-fade";
 
@@ -11,20 +11,16 @@ import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlayl
 import {
   setNowPlaying,
   loadLastGoodDefault,
-  loadLastGoodChild,
-  saveLastGoodChild,
-  getNowPlaying,
 } from "../utils/playlistCache";
 import { hashPlaylist } from "../utils/playlistHash";
 import {
-  prefetchSlideMedia,
-  prefetchWindow,
   prefetchWholePlaylist,
   setAdaptiveVideoWarmRange,
   probeBandwidth,
 } from "../utils/mediaPrefetcher";
 import type { ChildPlaylistResponse } from "../types/schedule";
 import { currentNetMode, type NetMode } from "../utils/netHealth";
+import HeadlessWarmup from "../features/schedule/components/HeadlessWarmup";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 type ScheduleUpdatePayload = {
@@ -53,76 +49,18 @@ async function warmPlaylistLight(
   const cancels: Array<() => void> = [];
   try {
     const slides = pl.slides as any[];
+    // أول شريحة + window بسيط
+    const { prefetchSlideMedia, prefetchWindow } = await import(
+      "../utils/mediaPrefetcher"
+    );
     cancels.push(prefetchSlideMedia(slides[0]));
     cancels.push(prefetchWindow(slides, 0, windowCount));
     await new Promise<void>((r) => setTimeout(r, timeoutMs));
+  } catch {
+    // ignore
   } finally {
     cancels.forEach((c) => c());
   }
-}
-
-function headlessWarmDOM(playlist: PlaylistT | null, maxMs = 180000) {
-  if (!hasSlides(playlist)) return () => {};
-
-  const cancelFetch = prefetchWholePlaylist(playlist as any);
-
-  const holder = document.createElement("div");
-  holder.style.position = "absolute";
-  holder.style.width = "0px";
-  holder.style.height = "0px";
-  holder.style.overflow = "hidden";
-  holder.style.opacity = "0";
-  holder.style.pointerEvents = "none";
-  document.body.appendChild(holder);
-
-  const created: Array<HTMLImageElement | HTMLVideoElement> = [];
-  for (const slide of (playlist!.slides as any[]) ?? []) {
-    for (const slot of slide.slots || []) {
-      const url = slot?.ImageFile as string | undefined;
-      const type = String(slot?.mediaType || "").toLowerCase();
-      if (!url) continue;
-      if (type === "video") {
-        const v = document.createElement("video");
-        v.preload = "auto";
-        v.muted = true;
-        v.playsInline = true;
-        v.crossOrigin = "anonymous";
-        v.src = url;
-        v.style.position = "absolute";
-        v.style.width = "1px";
-        v.style.height = "1px";
-        v.style.opacity = "0";
-        holder.appendChild(v);
-        created.push(v);
-      } else {
-        const img = new Image();
-        img.decoding = "async";
-        img.loading = "eager";
-        img.src = url;
-        created.push(img as any);
-      }
-    }
-  }
-
-  const timer = window.setTimeout(() => {}, maxMs);
-
-  return () => {
-    try {
-      window.clearTimeout(timer);
-    } catch {}
-    try {
-      created.forEach((el) => {
-        if (el instanceof HTMLVideoElement) {
-          try {
-            el.pause();
-            el.src = "";
-          } catch {}
-        }
-      });
-      if (holder.parentNode) holder.parentNode.removeChild(holder);
-    } catch {}
-    cancelFetch();
-  };
 }
 
 const PREWARM_LEAD_MS = 10 * 60 * 1000;
@@ -169,7 +107,7 @@ const HomeScreen: React.FC = () => {
     return () => window.clearInterval(id);
   }, []);
 
-  // Probe bandwidth once when we know a candidate video URL
+  // Probe bandwidth مرة واحدة لما يكون في playlist مرشّحة
   useEffect(() => {
     const pl =
       (decision?.playlist as PlaylistT | null) ||
@@ -206,9 +144,8 @@ const HomeScreen: React.FC = () => {
     const serverPl = (decision.playlist as PlaylistT | undefined) || null;
     const target = hasSlides(serverPl) ? serverPl : cachedDefault;
     return target || null;
-  }, [decision.playlist, (decision as any)?.source, cachedDefault]);
+  }, [decision.playlist, cachedDefault]);
 
-  // أي Playlist ضمن Schedule فعّال → امش على start_time تبع الـ schedule
   const childStartTime: string | null = useMemo(() => {
     if (!active) return null;
     return (active as any)?.start_time ?? null;
@@ -337,12 +274,13 @@ const HomeScreen: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, quietRefreshAll]);
 
-  // Save child after loop
+  // Save child after loop (من PlaylistPlayer via window event)
   useEffect(() => {
     const onLoop = () => {
       if (!hasSlides(current)) return;
       if ((decision as any)?.source === "child") {
-        saveLastGoodChild(current);
+        // lastGoodChild عم نعمله save داخل Hook آخر لو حبيت؛
+        // تقدر تستعمل saveLastGoodChild(current) هون كمان لو بدك.
       }
     };
     window.addEventListener("playlist:loop", onLoop);
@@ -379,69 +317,31 @@ const HomeScreen: React.FC = () => {
     })();
   }, [isOnline, netMode, activeScheduleId]);
 
-  const prewarmTimerRef = useRef<number | null>(null);
-  const stopHeadlessRef = useRef<() => void>(() => {});
+  // 🔥 Headless prewarm:
+  const [enableUpcomingWarm, setEnableUpcomingWarm] = useState(false);
 
   useEffect(() => {
-    if (prewarmTimerRef.current) {
-      window.clearTimeout(prewarmTimerRef.current);
-      prewarmTimerRef.current = null;
+    if (typeof nextStartDelayMs !== "number" || !hasSlides(upcomingPlaylist)) {
+      setEnableUpcomingWarm(false);
+      return;
     }
-    try {
-      stopHeadlessRef.current();
-    } catch {}
-    stopHeadlessRef.current = () => {};
 
-    if (typeof nextStartDelayMs === "number" && hasSlides(upcomingPlaylist)) {
-      const ms = Math.max(0, nextStartDelayMs - PREWARM_LEAD_MS);
-
-      prewarmTimerRef.current = window.setTimeout(() => {
-        stopHeadlessRef.current = headlessWarmDOM(
-          upcomingPlaylist,
-          3 * 60 * 1000
-        );
-      }, ms);
+    if (nextStartDelayMs <= PREWARM_LEAD_MS) {
+      setEnableUpcomingWarm(true);
+    } else {
+      setEnableUpcomingWarm(false);
     }
-    return () => {
-      if (prewarmTimerRef.current) {
-        window.clearTimeout(prewarmTimerRef.current);
-        prewarmTimerRef.current = null;
-      }
-      try {
-        stopHeadlessRef.current();
-      } catch {}
-      stopHeadlessRef.current = () => {};
-    };
   }, [nextStartDelayMs, upcomingPlaylist]);
 
   useEffect(() => {
-    if (typeof nextStartDelayMs === "number" && upcomingPlaylist) return;
+    // لو عندنا upcoming prewarm، ما نحتاج prewarm مستمر للـ target
+    if (enableUpcomingWarm) return;
 
-    try {
-      stopHeadlessRef.current();
-    } catch {}
-    stopHeadlessRef.current = () => {};
-
-    if (Date.now() < blockTargetUntil.current) return;
-    if (hasSlides(targetPlaylist)) {
-      stopHeadlessRef.current = headlessWarmDOM(targetPlaylist, 2 * 60 * 1000);
-    }
-
-    return () => {
-      try {
-        stopHeadlessRef.current();
-      } catch {}
-      stopHeadlessRef.current = () => {};
-    };
-  }, [targetPlaylist, nextStartDelayMs, upcomingPlaylist]);
-
-  useEffect(() => {
-    if (!hasSlides(current)) return;
-    if (netMode !== "ONLINE_GOOD") return;
-    if (nextReady || isSwapping) return;
-    const cancel = prefetchWholePlaylist(current as any);
+    if (!hasSlides(targetPlaylist)) return;
+    // prefetchWholePlaylist خفيف أثناء السطوع
+    const cancel = prefetchWholePlaylist(targetPlaylist as any);
     return () => cancel();
-  }, [current, netMode, nextReady, isSwapping]);
+  }, [enableUpcomingWarm, targetPlaylist]);
 
   if (!screenId) {
     return (
@@ -464,6 +364,24 @@ const HomeScreen: React.FC = () => {
 
   return (
     <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
+      {/* Headless warmup للـ upcoming (إذا قرب وقتها) */}
+      {enableUpcomingWarm && hasSlides(upcomingPlaylist) && (
+        <HeadlessWarmup
+          playlist={upcomingPlaylist as any}
+          maxMs={3 * 60_000}
+          aggressive={true}
+        />
+      )}
+
+      {/* أو fallback warmup للـ target */}
+      {!enableUpcomingWarm && hasSlides(targetPlaylist) && (
+        <HeadlessWarmup
+          playlist={targetPlaylist as any}
+          maxMs={2 * 60_000}
+          aggressive={false}
+        />
+      )}
+
       {hasSlides(current) && (
         <div className="absolute inset-0">
           <SmartPlayer
@@ -472,7 +390,7 @@ const HomeScreen: React.FC = () => {
             screenId={screenId}
             scheduleId={activeScheduleId}
             childStartTime={childStartTime}
-            activeSchedule={active} // 👈 أضف هذه
+            activeSchedule={active as any}
             onRequestRefetch={() => void quietRefresh(null)}
           />
         </div>
@@ -491,7 +409,7 @@ const HomeScreen: React.FC = () => {
             screenId={screenId}
             scheduleId={activeScheduleId}
             childStartTime={childStartTime}
-            activeSchedule={active} // 👈 نفس الشي
+            activeSchedule={active as any}
             onRequestRefetch={() => void quietRefresh(null)}
           />
         </div>

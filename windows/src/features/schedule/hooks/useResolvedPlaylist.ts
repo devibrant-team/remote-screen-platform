@@ -192,7 +192,14 @@ export function useResolvedPlaylist(screenId?: string) {
     return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
   }, [next]);
 
-  /* ── Decision logic: Child vs Default ────────────────────── */
+  /* ── Decision logic: Child vs Default ──────────────────────
+   *
+   *  الهدف الأساسي:
+   *   - لو في active schedule (child window) والسيرفر وقع فجأة / API عملت error،
+   *     ما نطّ مباشرة على default.
+   *   - نكمّل على:
+   *       nowPlaying.child  → cachedChild → default (live/cached) → nowPlaying أيًا كان.
+   */
   const decision: Decision = useMemo(() => {
     const running = getNowPlaying() ?? null;
 
@@ -204,7 +211,13 @@ export function useResolvedPlaylist(screenId?: string) {
 
     const hasActiveSchedule = !!active;
 
-    // (A) ما في schedule حاليًا → default
+    const runningHasSlides = running && hasSlides(running.playlist);
+    const runningIsChild =
+      running && running.source === "child" && hasSlides(running.playlist);
+
+    // ───────────────────────────────
+    // A) ما في schedule فعّال → نشتغل default فقط
+    // ───────────────────────────────
     if (!hasActiveSchedule) {
       if (hasSlides(liveDefault)) {
         return {
@@ -213,6 +226,7 @@ export function useResolvedPlaylist(screenId?: string) {
           reason: "no schedule → fresh default",
         };
       }
+
       if (hasSlides(cachedDefault?.playlist)) {
         return {
           source: "cache",
@@ -220,10 +234,11 @@ export function useResolvedPlaylist(screenId?: string) {
           reason: "no schedule → cached default",
         };
       }
+
       if (
         running &&
-        hasSlides(running.playlist) &&
-        running.source === "default"
+        running.source === "default" &&
+        hasSlides(running.playlist)
       ) {
         return {
           source: "cache",
@@ -231,14 +246,19 @@ export function useResolvedPlaylist(screenId?: string) {
           reason: "no schedule → keep running default",
         };
       }
+
       return {
         source: "empty",
         playlist: null,
-        reason: "no schedule → no default available",
+        reason: "no schedule → nothing available",
       };
     }
 
-    // (B) في schedule فعّال
+    // ───────────────────────────────
+    // B) في schedule فعّال (child window)
+    // ───────────────────────────────
+
+    // B-1) السيرفر بخير وفي live child فيه slides → هذا الأساس
     if (hasSlides(liveChild)) {
       return {
         source: "child",
@@ -247,14 +267,28 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
+    // B-2) ما في live child صالح (server down / API error / playlist فاضية)
+    //      → لا نرجع default فورًا، بل نحاول نكمّل child قدر الإمكان
+
+    // 1) لو في nowPlaying من نوع child وفيه slides → كمل عليه
+    if (runningIsChild) {
+      return {
+        source: "cache",
+        playlist: running!.playlist,
+        reason: "active schedule → keep running child (server down)",
+      };
+    }
+
+    // 2) لو في lastGoodChild بالـ localStorage → استعمله
     if (hasSlides(cachedChild?.playlist)) {
       return {
         source: "cache",
         playlist: cachedChild!.playlist,
-        reason: "active schedule → cached child",
+        reason: "active schedule → cached child (fallback)",
       };
     }
 
+    // 3) لو في default live من السيرفر → fallback
     if (hasSlides(liveDefault)) {
       return {
         source: "default",
@@ -262,6 +296,8 @@ export function useResolvedPlaylist(screenId?: string) {
         reason: "active schedule → fallback default (live)",
       };
     }
+
+    // 4) لو في default من الكاش → fallback
     if (hasSlides(cachedDefault?.playlist)) {
       return {
         source: "cache",
@@ -270,14 +306,16 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    if (running && hasSlides(running.playlist)) {
+    // 5) لو في أي nowPlaying (حتى لو مش child) → خليك على اللي شغال
+    if (runningHasSlides) {
       return {
         source: "cache",
-        playlist: running.playlist,
-        reason: "active schedule → keep running playlist",
+        playlist: running!.playlist,
+        reason: "active schedule → keep running playlist (last resort)",
       };
     }
 
+    // 6) ولا شيء من فوق → فاضي
     return {
       source: "empty",
       playlist: null,

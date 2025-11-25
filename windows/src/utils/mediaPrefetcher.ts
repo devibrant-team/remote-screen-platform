@@ -5,6 +5,16 @@ type Cancel = () => void;
 
 const imageCache = new Set<string>();
 const videoCache = new Set<string>();
+
+/**
+ * inflightFetches:
+ *  - مفتاحها هو URL الميديا بعد normalize
+ *  - قيمتها AbortController للـ fetch الجاري
+ *
+ *  منطق:
+ *  - طلب واحد فقط جاري لكل URL.
+ *  - أي prefetchVideo ثاني لنفس URL → لا يفتح طلب جديد ولا يوقف القديم.
+ */
 const inflightFetches = new Map<string, AbortController>();
 
 /** توحيد URL الميديا: إزالة cb=.. إن وُجد لمنع اختلافات بين التسخين والتشغيل */
@@ -28,7 +38,7 @@ export function prefetchImage(url?: string): Cancel {
   img.decoding = "async";
   img.loading = "eager";
   img.src = url;
-  img.onload = () => !cancelled && imageCache.add(url);
+  img.onload = () => !cancelled && imageCache.add(url!);
   img.onerror = () => {};
   return () => {
     cancelled = true;
@@ -63,14 +73,16 @@ export async function probeBandwidth(urlSample: string): Promise<number> {
     const mbps = (1 /*MB*/ * 8 * 1000) / ms; // megabits/s
     lastMbps = mbps;
 
-    // Heuristic: دفّئ ~5 ثواني (سقف 12Mbps لتجنب المبالغة).
-    const targetMb = Math.min(mbps, 12) * 5 / 8; // MB
+    // Heuristic: دفّئ ~5 ثواني (سقف 12Mbps لتجنب المبالغة)
+    const targetMb = (Math.min(mbps, 12) * 5) / 8; // MB
     const targetBytes = Math.round(targetMb * 1024 * 1024);
     setVideoWarmRange(targetBytes);
 
     // eslint-disable-next-line no-console
     console.log(
-      `[prefetch] probe ≈ ${mbps.toFixed(2)} Mbps → warm ~${(targetBytes/1024/1024).toFixed(1)} MB`
+      `[prefetch] probe ≈ ${mbps.toFixed(
+        2
+      )} Mbps → warm ~${(targetBytes / 1024 / 1024).toFixed(1)} MB`
     );
     return mbps;
   } catch {
@@ -82,38 +94,61 @@ export async function probeBandwidth(urlSample: string): Promise<number> {
 export function setAdaptiveVideoWarmRange(
   mode: "ONLINE_GOOD" | "ONLINE_SLOW" | "SERVER_DOWN" | "OFFLINE"
 ) {
-  if (mode === "ONLINE_GOOD") setVideoWarmRange(6 * 1024 * 1024);      // 6 MB
+  if (mode === "ONLINE_GOOD") setVideoWarmRange(6 * 1024 * 1024); // 6 MB
   else if (mode === "ONLINE_SLOW") setVideoWarmRange(8 * 1024 * 1024); // 8 MB
-  else setVideoWarmRange(3 * 1024 * 1024);                              // 3 MB
+  else setVideoWarmRange(3 * 1024 * 1024); // 3 MB
 }
 
-/** Prefetch a small initial byte range of the video (seeds HTTP cache). */
+/**
+ * Prefetch a small initial byte range of the video (seeds HTTP cache).
+ *
+ * منطق جديد:
+ *  - لو الفيديو سبق وتسخّن (videoCache) → لا شيء.
+ *  - لو هناك fetch جاري لنفس URL (inflightFetches) → لا شيء.
+ *  - غير ذلك → نعمل Range GET واحد فقط.
+ */
 export function prefetchVideo(url?: string): Cancel {
   url = normalizeMediaUrl(url);
   if (!url) return () => {};
   if (videoCache.has(url)) return () => {};
 
-  if (inflightFetches.has(url)) {
-    const existing = inflightFetches.get(url)!;
-    return () => existing.abort();
+  // لو في طلب جاري لنفس URL → لا تعمل طلب جديد
+  const existing = inflightFetches.get(url);
+  if (existing) {
+    return () => {
+      // لا نلغي الطلب الأصلي، نتركه يكمل
+    };
   }
 
   const ac = new AbortController();
   inflightFetches.set(url, ac);
 
-  // Prefer ranged GET (HEAD sometimes blocked/incorrect behind CDNs)
   fetch(url, {
     method: "GET",
     headers: { Range: `bytes=0-${VIDEO_WARM_RANGE - 1}` },
     signal: ac.signal,
-    cache: "default", // اسمح بإعادة الاستخدام
+    cache: "default",
     credentials: "omit",
   })
-    .then(() => videoCache.add(url!))
-    .catch(() => {})
-    .finally(() => inflightFetches.delete(url!));
+    .then((res) => {
+      if (res && res.ok) {
+        videoCache.add(url!);
+      }
+    })
+    .catch(() => {
+      // نتجاهل الأخطاء
+    })
+    .finally(() => {
+      inflightFetches.delete(url!);
+    });
 
-  return () => ac.abort();
+  // هذا الـ cancel يخص هذا الـ fetch فقط
+  return () => {
+    try {
+      if (!ac.signal.aborted) ac.abort();
+    } catch {}
+    inflightFetches.delete(url!);
+  };
 }
 
 /** Prefetch all media in a slide (returns a combined cancel). */
