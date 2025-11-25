@@ -59,12 +59,12 @@ export function useResolvedPlaylist(screenId?: string) {
   const day = parent.data?.date;
   const items = parent.data?.data ?? [];
 
-  // ⏱️ tick محلي كل ثانية عشان نعيد حساب الـ active حسب ساعة السيرفر
+  // ⏱️ tick محلي سريع (كل 100ms) لنعيد حساب الـ active حسب ساعة السيرفر
   const [timeTick, setTimeTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => {
       setTimeTick((t) => t + 1);
-    }, 100);
+    }, 100); // 0.1 ثانية
     return () => clearInterval(id);
   }, []);
 
@@ -95,8 +95,20 @@ export function useResolvedPlaylist(screenId?: string) {
   }, [day, items, timeTick, clock]);
 
   const activeScheduleId = pickScheduleId(active) ?? undefined;
+  const nextScheduleId = pickScheduleId(next) ?? undefined;
 
-  /* ── Live queries ─────────────────────────────────────────── */
+  /* ── تأخيرات مبنية على ساعة السيرفر فقط ── */
+  const activeEndDelayMs: number | undefined = (() => {
+    const endTime = pickStr(active, "end_time");
+    return endTime ? clock.msUntil(endTime) : undefined;
+  })();
+
+  const nextStartDelayMs: number | undefined = (() => {
+    const startTime = pickStr(next, "start_time");
+    return startTime ? clock.msUntil(startTime) : undefined;
+  })();
+
+  /* ── Live child query (للـ active schedule) ───────────────── */
   const child = useChildPlaylist(activeScheduleId, screenId);
 
   const wantDefault =
@@ -125,28 +137,56 @@ export function useResolvedPlaylist(screenId?: string) {
     }
   }, [screenId, active, qc]);
 
-  /* ── Prefetch child عند تغيّر الـschedule الفعّال ─────────── */
+  /* ── Prefetch child للـ active schedule كـ backup ─────────── */
   useEffect(() => {
     if (!activeScheduleId) return;
     qc
       .prefetchQuery({
         queryKey: qk.child(activeScheduleId, screenId),
         queryFn: () => fetchChildPlaylist(activeScheduleId, screenId),
-        staleTime: 0,
+        staleTime: 60_000, // نفس staleTime تبع useChildPlaylist
       })
       .catch(() => {});
   }, [activeScheduleId, screenId, qc]);
 
-  /* ── تأخيرات مبنية على ساعة السيرفر فقط (msUntil آمنة داخل الـ hook) ── */
-  const activeEndDelayMs = useMemo(() => {
-    const endTime = pickStr(active, "end_time");
-    return endTime ? clock.msUntil(endTime) : undefined;
-  }, [active, clock]);
+  /* ── Prefetch child القادم قبل 30 ثانية من بداية الـ schedule ─────────── */
+  useEffect(() => {
+    if (!next) return;
+    if (!screenId) return;
+    if (!clock.isReady()) return;
 
-  const nextStartDelayMs = useMemo(() => {
+    const sid = nextScheduleId;
     const startTime = pickStr(next, "start_time");
-    return startTime ? clock.msUntil(startTime) : undefined;
-  }, [next, clock]);
+    if (!sid || !startTime) return;
+
+    const rawMs = clock.msUntil(startTime);
+    if (rawMs == null) return;
+
+    const PREFETCH_LEAD_MS = 30_000; // 30 ثانية قبل start
+    const delay = Math.max(0, rawMs - PREFETCH_LEAD_MS);
+
+    let timer: number | undefined;
+
+    const arm = () => {
+      qc
+        .prefetchQuery({
+          queryKey: qk.child(sid, screenId),
+          queryFn: () => fetchChildPlaylist(sid, screenId),
+          staleTime: 60_000, // 👈 يظل Fresh لغاية بداية الـ window
+        })
+        .catch(() => {});
+    };
+
+    if (delay === 0) {
+      arm();
+    } else {
+      timer = window.setTimeout(arm, delay);
+    }
+
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [next, nextScheduleId, screenId, clock, qc]);
 
   const upcomingPlaylist = useMemo(() => {
     return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
@@ -252,6 +292,7 @@ export function useResolvedPlaylist(screenId?: string) {
     defaultQ.isError,
   ]);
 
+  // Prefetch window من الشرائح للميديا (صور/فيديو) حسب الـ decision
   useEffect(() => {
     if (!hasSlides(decision.playlist)) return;
     const cancel = prefetchWindow(decision.playlist.slides, 0, 2);

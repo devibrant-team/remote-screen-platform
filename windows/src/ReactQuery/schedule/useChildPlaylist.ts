@@ -49,13 +49,19 @@ export async function fetchChildPlaylist(
 
 export function useChildPlaylist(
   scheduleId?: number | string,
-  screenId?: number | string
+  screenId?: number | string,
+  enabled: boolean = true
 ) {
+  const hasId =
+    scheduleId !== undefined &&
+    scheduleId !== null &&
+    String(scheduleId) !== "";
+
   return useQuery({
     queryKey: qk.child(scheduleId, screenId),
     queryFn: () => fetchChildPlaylist(scheduleId as number | string, screenId),
-    enabled: !!scheduleId,
-    staleTime: 60_000,
+    enabled: hasId && enabled,
+    staleTime: 60_000,      // 👈 البيانات تظل Fresh لمدة دقيقة
     gcTime: 5 * 60_000,
     retry: 2,
   });
