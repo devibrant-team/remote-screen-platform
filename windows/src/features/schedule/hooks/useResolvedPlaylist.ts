@@ -64,7 +64,7 @@ export function useResolvedPlaylist(screenId?: string) {
   useEffect(() => {
     const id = setInterval(() => {
       setTimeTick((t) => t + 1);
-    }, 1000);
+    }, 100);
     return () => clearInterval(id);
   }, []);
 
