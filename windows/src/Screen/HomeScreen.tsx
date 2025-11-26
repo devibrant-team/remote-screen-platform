@@ -11,6 +11,7 @@ import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlayl
 import {
   setNowPlaying,
   loadLastGoodDefault,
+  saveLastGoodChild,
 } from "../utils/playlistCache";
 import { hashPlaylist } from "../utils/playlistHash";
 import {
@@ -21,6 +22,7 @@ import {
 import type { ChildPlaylistResponse } from "../types/schedule";
 import { currentNetMode, type NetMode } from "../utils/netHealth";
 import HeadlessWarmup from "../features/schedule/components/HeadlessWarmup";
+import type { PlaylistLoopHealthDetail } from "../features/schedule/hooks/usePlaylistHealth";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 type ScheduleUpdatePayload = {
@@ -34,11 +36,6 @@ const hasSlides = (pl?: PlaylistT | null): pl is PlaylistT =>
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
-
-const describePlaylist = (pl: PlaylistT | null) => ({
-  slides: hasSlides(pl) ? pl.slides.length : 0,
-  hash: hashPlaylist(pl as any),
-});
 
 async function warmPlaylistLight(
   pl: PlaylistT | null,
@@ -157,7 +154,6 @@ const HomeScreen: React.FC = () => {
   );
   const [nextPl, setNextPl] = useState<PlaylistT | null>(null);
   const [nextReady, setNextReady] = useState(false);
-  const [isSwapping, setIsSwapping] = useState(false);
 
   const currentHash = useRef<string>(hashPlaylist(current as any));
   const swapAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
@@ -182,12 +178,11 @@ const HomeScreen: React.FC = () => {
       if (swapAbortRef.current.aborted) return;
       setNextReady(true);
 
-      setIsSwapping(true);
+      // انتقال ناعم بين current و next
       setTimeout(() => {
         if (swapAbortRef.current.aborted) return;
         setCurrent(targetPlaylist);
         currentHash.current = targetHash;
-        setIsSwapping(false);
         setNextPl(null);
         setNextReady(false);
       }, 250);
@@ -198,7 +193,7 @@ const HomeScreen: React.FC = () => {
     };
   }, [targetPlaylist, netMode]);
 
-  // Save what is displayed
+  // Save what is displayed (nowPlaying cache)
   useEffect(() => {
     if (!hasSlides(current)) return;
     const sameAsDecision =
@@ -274,17 +269,45 @@ const HomeScreen: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, quietRefreshAll]);
 
-  // Save child after loop (من PlaylistPlayer via window event)
+  // ✅ Save lastGoodChild من الـhealth hook بس لما اللفة نظيفة
   useEffect(() => {
-    const onLoop = () => {
+    const handler = (ev: Event) => {
       if (!hasSlides(current)) return;
-      if ((decision as any)?.source === "child") {
-        // lastGoodChild عم نعمله save داخل Hook آخر لو حبيت؛
-        // تقدر تستعمل saveLastGoodChild(current) هون كمان لو بدك.
+
+      const detail = (ev as CustomEvent<PlaylistLoopHealthDetail>).detail;
+      if (!detail) return;
+
+      // نهتم فقط بحالة child الفعّالة
+      if ((decision as any)?.source !== "child") return;
+
+      if (!detail.ok) {
+        // صار glitch بهاللفة → ما منحفظ
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[PlaylistHealth] loop had glitch, skip save", detail);
+        }
+        return;
+      }
+
+      try {
+        saveLastGoodChild(current as any);
+        if (process.env.NODE_ENV !== "production") {
+          console.log(
+            "[PlaylistHealth] ✅ saved lastGoodChild from clean loop",
+            {
+              loopIndex: detail.loopIndex,
+              scheduleId: detail.scheduleId,
+            }
+          );
+        }
+      } catch (e) {
+        console.log("[PlaylistHealth] saveLastGoodChild error", e);
       }
     };
-    window.addEventListener("playlist:loop", onLoop);
-    return () => window.removeEventListener("playlist:loop", onLoop);
+
+    window.addEventListener("playlist:loop-health", handler as any);
+    return () => {
+      window.removeEventListener("playlist:loop-health", handler as any);
+    };
   }, [current, (decision as any)?.source]);
 
   // أوفلاين: لو window انتهت نرجّع آخر Default

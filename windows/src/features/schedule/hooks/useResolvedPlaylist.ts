@@ -83,7 +83,6 @@ export function useResolvedPlaylist(screenId?: string) {
     const nowSec = clock.nowSecs();
     const res = resolveActiveAndNext(items, nowSec);
 
-    // Debug optional:
     // console.log("[SCHEDULE_DEBUG] useResolvedPlaylist", {
     //   day,
     //   nowSec,
@@ -192,14 +191,7 @@ export function useResolvedPlaylist(screenId?: string) {
     return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
   }, [next]);
 
-  /* ── Decision logic: Child vs Default ──────────────────────
-   *
-   *  الهدف الأساسي:
-   *   - لو في active schedule (child window) والسيرفر وقع فجأة / API عملت error،
-   *     ما نطّ مباشرة على default.
-   *   - نكمّل على:
-   *       nowPlaying.child  → cachedChild → default (live/cached) → nowPlaying أيًا كان.
-   */
+  /* ── Decision logic: Child vs Default ────────────────────── */
   const decision: Decision = useMemo(() => {
     const running = getNowPlaying() ?? null;
 
@@ -215,9 +207,7 @@ export function useResolvedPlaylist(screenId?: string) {
     const runningIsChild =
       running && running.source === "child" && hasSlides(running.playlist);
 
-    // ───────────────────────────────
     // A) ما في schedule فعّال → نشتغل default فقط
-    // ───────────────────────────────
     if (!hasActiveSchedule) {
       if (hasSlides(liveDefault)) {
         return {
@@ -254,11 +244,9 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // ───────────────────────────────
     // B) في schedule فعّال (child window)
-    // ───────────────────────────────
 
-    // B-1) السيرفر بخير وفي live child فيه slides → هذا الأساس
+    // B-1) live child جاهز
     if (hasSlides(liveChild)) {
       return {
         source: "child",
@@ -267,10 +255,9 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // B-2) ما في live child صالح (server down / API error / playlist فاضية)
-    //      → لا نرجع default فورًا، بل نحاول نكمّل child قدر الإمكان
+    // B-2) السيرفر واقع / child فاضي → حاول تحافظ على child قدر الإمكان
 
-    // 1) لو في nowPlaying من نوع child وفيه slides → كمل عليه
+    // 1) nowPlaying من نوع child
     if (runningIsChild) {
       return {
         source: "cache",
@@ -279,7 +266,7 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 2) لو في lastGoodChild بالـ localStorage → استعمله
+    // 2) lastGoodChild من الكاش
     if (hasSlides(cachedChild?.playlist)) {
       return {
         source: "cache",
@@ -288,7 +275,7 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 3) لو في default live من السيرفر → fallback
+    // 3) default live
     if (hasSlides(liveDefault)) {
       return {
         source: "default",
@@ -297,7 +284,7 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 4) لو في default من الكاش → fallback
+    // 4) default cached
     if (hasSlides(cachedDefault?.playlist)) {
       return {
         source: "cache",
@@ -306,7 +293,7 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 5) لو في أي nowPlaying (حتى لو مش child) → خليك على اللي شغال
+    // 5) أي nowPlaying
     if (runningHasSlides) {
       return {
         source: "cache",
@@ -315,7 +302,7 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 6) ولا شيء من فوق → فاضي
+    // 6) ولا شيء
     return {
       source: "empty",
       playlist: null,

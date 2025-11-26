@@ -23,6 +23,7 @@ import { currentNetMode, type NetMode } from "../../../utils/netHealth";
 import PlaylistDebugPanel from "./PlaylistDebugPanel";
 import { useSlideLogic } from "../hooks/useSlideLogic";
 import { useSchedulePlaylistTimeline } from "../hooks/useSchedulePlaylistTimeline";
+import { usePlaylistHealth } from "../hooks/usePlaylistHealth";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 
@@ -53,6 +54,7 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
       if (vid) {
         vid.removeEventListener("canplay", onCanPlay);
         vid.removeEventListener("playing", onPlaying);
+        vid.removeEventListener("waiting", onWaiting);
       }
       if (cbId != null && (vid as any).cancelVideoFrameCallback) {
         try {
@@ -71,6 +73,9 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
 
     const onCanPlay = () => finish();
     const onPlaying = () => finish();
+    const onWaiting = () => {
+      // هون بس للـoverlay، الـhealth الحقيقي جوّا usePlaylistHealth
+    };
 
     if (!vid) {
       finish();
@@ -89,6 +94,7 @@ function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
 
     vid.addEventListener("canplay", onCanPlay, { once: true });
     vid.addEventListener("playing", onPlaying, { once: true });
+    vid.addEventListener("waiting", onWaiting, { once: true });
   });
 }
 
@@ -133,6 +139,11 @@ export default function PlaylistPlayer({
   const resolvedScheduleId: string | number | undefined =
     scheduleId ?? activeSchedule?.scheduleId;
 
+  // نوع الـplaylist: child أو default (مفيد للحارس)
+  const sourceKind = (childStartTime ? "child" : "default") as
+    | "child"
+    | "default";
+
   // 🔁 منطق السيرفر/الـtimeline: أي slide لازم تكون الآن؟ وكم مرق عليها؟ وكم باقي؟
   const slideLogic = useSlideLogic(slides as any, childStartTime);
 
@@ -144,6 +155,12 @@ export default function PlaylistPlayer({
     childStartTime: childStartTime ?? null,
   });
 
+  // 🛡️ حارس الصحة للـ playlist (glitches / loops + video guards)
+  const health = usePlaylistHealth({
+    scheduleId: resolvedScheduleId,
+    source: sourceKind,
+  });
+
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
   useEffect(() => {
     const id = window.setInterval(() => setNetMode(currentNetMode()), 4000);
@@ -153,14 +170,13 @@ export default function PlaylistPlayer({
   const prevIndexRef = useRef<number>(initialIndex);
 
   const videoRefs = useRef<Record<number, HTMLVideoElement[]>>({});
-  const videoGuardsCleanup = useRef<Map<HTMLVideoElement, () => void>>(
-    new Map()
-  );
 
   const [showOverlay, setShowOverlay] = useState(false);
 
   // ⏱️ تايمر محلي فقط للـ debug (ما بيحرّك next أبداً)
   const [localSlideElapsed, setLocalSlideElapsed] = useState(0);
+
+  const lastSeekPerSlide = useRef<Record<string | number, number>>({});
 
   useEffect(() => {
     const start = performance.now();
@@ -179,19 +195,6 @@ export default function PlaylistPlayer({
     ? slideLogic.offsetInSlide
     : localSlideElapsed;
 
-  // حُرّاس مبسّطين للفيديو (بدون أي تأثير على التايمر)
-  function attachVideoGuards(videoEl: HTMLVideoElement) {
-    const prev = videoGuardsCleanup.current.get(videoEl);
-    if (prev) prev();
-
-    const cleanup = () => {
-      // مساحة للـlogs لو حبيت بعدين
-    };
-
-    videoGuardsCleanup.current.set(videoEl, cleanup);
-    return cleanup;
-  }
-
   const slideTo = (idx: number) => {
     if (!slides.length) return;
     const target = (idx + slides.length) % slides.length;
@@ -200,7 +203,7 @@ export default function PlaylistPlayer({
   };
   const next = () => slideTo(activeIndex + 1);
 
-  // 🔄 sync مع منطق السيرفر/الـtimeline:
+  // 🔄 sync مع منطق السيرفر/الـtimeline: أي slide لازم تكون الآن (index sync)
   useEffect(() => {
     if (!slideLogic.enabled) return;
     if (!slides.length) return;
@@ -209,9 +212,77 @@ export default function PlaylistPlayer({
     if (!Number.isFinite(idx)) return;
     if (idx === activeIndex) return;
 
+    // حرك الـ Swiper بدون transition delay
     swiperRef.current?.slideTo(idx, 0);
     setActiveIndex(idx);
   }, [slideLogic.enabled, slideLogic.slideIndex, slides.length, activeIndex]);
+
+  // 🎯 Sync الفيديو مع offsetInSlide لما ندخل على الشريحة في نصها
+  useEffect(() => {
+    if (!slideLogic.enabled) return;
+    if (!slides.length) return;
+
+    const slide = slides[activeIndex] as PlaylistSlide | undefined;
+    if (!slide) return;
+
+    const duration = slide.duration || 0;
+    const offset = slideLogic.offsetInSlide;
+
+    // لو ما في مدة أو offset سالب
+    if (!duration || offset < 0) return;
+
+    const slideKey = slide.id ?? activeIndex;
+
+    // بداية loop جديدة تقريباً → خليه يبدأ من 0 وامسح آخر seek
+    if (offset < 0.25) {
+      delete lastSeekPerSlide.current[slideKey];
+      return;
+    }
+
+    // لو نحن تقريباً في آخر الشريحة، ما في داعي نعمل seek
+    if (offset > duration - 0.25) return;
+
+    // امنع spam: لا تعيد الـ seek إذا الفرق صغير جداً
+    const clamped = Math.min(
+      Math.max(offset, 0),
+      Math.max(0, duration - 0.25)
+    );
+    const last = lastSeekPerSlide.current[slideKey];
+    if (last != null && Math.abs(last - clamped) < 0.4) {
+      return;
+    }
+
+    const vids = videoRefs.current[slide.id] || [];
+
+    vids.forEach((v) => {
+      const applySeek = () => {
+        try {
+          let target = clamped;
+          // لو الفيديو أقصر من duration اللي عندنا، نزبطها
+          if (v.duration && isFinite(v.duration)) {
+            target = Math.min(clamped, Math.max(0, v.duration - 0.25));
+          }
+          v.currentTime = target;
+        } catch {
+          // ignore
+        }
+      };
+
+      if (v.readyState >= 1) {
+        // metadata جاهزة → فينا نعمل seek فوراً
+        applySeek();
+      } else {
+        // استنى metadata
+        const onMeta = () => {
+          v.removeEventListener("loadedmetadata", onMeta);
+          applySeek();
+        };
+        v.addEventListener("loadedmetadata", onMeta);
+      }
+    });
+
+    lastSeekPerSlide.current[slideKey] = clamped;
+  }, [slideLogic.enabled, slideLogic.offsetInSlide, activeIndex, slides]);
 
   // external "skip once" event
   useEffect(() => {
@@ -258,7 +329,8 @@ export default function PlaylistPlayer({
 
     const prev = prevIndexRef.current;
     if (slides.length > 0 && prev === slides.length - 1 && activeIndex === 0) {
-      window.dispatchEvent(new CustomEvent("playlist:loop"));
+      // ✅ نهاية loop كاملة → خلي الحارس يقرّر إذا كانت نظيفة أو لا
+      health.notifyLoopEnd();
     }
     prevIndexRef.current = activeIndex;
 
@@ -276,14 +348,15 @@ export default function PlaylistPlayer({
         v.playsInline = true;
         v.crossOrigin = "anonymous";
         v.style.willChange = "transform, opacity";
-        attachVideoGuards(v);
+        // ربط الفيديو مع حارس الـhealth
+        health.registerVideoGuard(v, slide.id);
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
       } catch {}
     });
 
     // 🔔 مافي setTimeout هنا أبداً – الانتقال للـ slide اللي بعدها
-  }, [activeIndex, slides]);
+  }, [activeIndex, slides, health]);
 
   // تسجيل الفيديوهات فور دخولها DOM
   const registerVideo = (slideId: number, el: HTMLVideoElement | null) => {
@@ -303,19 +376,10 @@ export default function PlaylistPlayer({
     const list = (videoRefs.current[slideId] =
       videoRefs.current[slideId] || []);
     if (!list.includes(el)) list.push(el);
-  };
 
-  // تنظيف حُرّاس الفيديو
-  useEffect(() => {
-    return () => {
-      videoGuardsCleanup.current.forEach((fn) => {
-        try {
-          fn();
-        } catch {}
-      });
-      videoGuardsCleanup.current.clear();
-    };
-  }, []);
+    // نسجل الفيديو مع الحارس مباشرة
+    health.registerVideoGuard(el, slideId);
+  };
 
   // Reverb للتحكم عن بعد
   useEffect(() => {
