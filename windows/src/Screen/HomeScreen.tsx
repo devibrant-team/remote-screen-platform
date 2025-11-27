@@ -267,29 +267,12 @@ const HomeScreen: React.FC = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, quietRefreshAll]);
-  useEffect(() => {
-  // if (!screenId) return; // 👈 ضروري
 
-  const channelName = `screenDel.${screenId}`;
-  const channel = echo.channel(channelName);
 
-  const handler = (event: any) => {
-    console.log("Screen deleted event received:", event);
-    alert("Screen was deleted on the server.");
-  };
 
-  channel.listen("ScreenDeleted", handler);
 
-  // Cleanup
-  return () => {
-    try {
-      channel.stopListening("ScreenDeleted", handler);
-      echo.leave(channelName);
-    } catch (err) {
-      console.warn("[Reverb] cleanup error", err);
-    }
-  };
-}, [screenId]);
+
+
   useEffect(() => {
     const handler = (ev: Event) => {
       if (!hasSlides(current)) return;

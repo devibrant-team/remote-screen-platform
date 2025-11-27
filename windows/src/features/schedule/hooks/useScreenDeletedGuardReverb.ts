@@ -26,43 +26,44 @@ export function useScreenDeletedGuardReverb(
 ) {
   const qc = useQueryClient();
 
-  useEffect(() => {
-    // لو ما في screenId → ما نعمل شي
-    if (screenId == null) return;
+ useEffect(() => {
+  if (!screenId) {
+    console.log("[Del] ❌ No screenId yet, skipping subscription");
+    return;
+  }
 
-    const idStr = String(screenId);
-    const channelName = `screens.${idStr}`;
+  const DeleteChannel = `screenDel.${screenId}`;
+  console.log("[Del] 🔔 Subscribing to delete channel:", DeleteChannel);
 
-    console.log("[ScreenGuard] 👂 Mount guard for screen:", {
-      screenId: idStr,
-      channelName,
+  const channelDel = echo.channel(DeleteChannel);
+
+  channelDel.subscribed(() => {
+    console.log("[Del] ✅ Subscribed to", DeleteChannel);
+  });
+
+  const handler = (event: any) => {
+    console.log("[Del] 🔥 ScreenDeleted event received:", {
+      channel: DeleteChannel,
+      payload: event,
     });
+    alert("Screen was deleted on the server.");
 
-    const channel = echo.channel(channelName);
+    clearAllIguanaCaches(qc).catch(() => {});
+      handleScreenDeletedGlobal(screenId);
+  };
 
-    const onDeleted = (data: any) => {
-      console.log("[ScreenGuard] 🧨 ScreenDeleted EVENT:", {
-        channelName,
-        data,
-      });
+  // IMPORTANT: use `.ScreenDeleted` because you used broadcastAs()
+  channelDel.listen(".ScreenDeleted", handler);
 
-      // 🧹 امسح كل الكاشات (نفس reset تبع الـ API guard)
-      clearAllIguanaCaches(qc).catch(() => {});
-      handleScreenDeletedGlobal(idStr);
-    };
-
-    console.log(
-      "[ScreenGuard] 🎧 Listening for .ScreenDeleted on",
-      channelName
-    );
-    channel.listen(".ScreenDeleted", onDeleted);
-
-    return () => {
-      console.log("[ScreenGuard] 🧽 cleanup guard for:", channelName);
-      try {
-        channel.stopListening(".ScreenDeleted", onDeleted);
-        echo.leave(channelName);
-      } catch {}
-    };
-  }, [screenId, qc]);
+  // Cleanup
+  return () => {
+    console.log("[Del] 🧹 Cleanup delete channel:", DeleteChannel);
+    try {
+      channelDel.stopListening(".ScreenDeleted"); // no handler argument
+      echo.leave(DeleteChannel);
+    } catch (err) {
+      console.warn("[Del] cleanup error", err);
+    }
+  };
+}, [screenId , qc]);
 }
