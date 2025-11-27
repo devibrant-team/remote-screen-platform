@@ -152,10 +152,11 @@ function ensureServerOrAlert() {
     noServerTimeAlertShown = true;
 
     // Toast بدل window.alert
-    showServerToast(
-      "⚠️ لم يتم استلام الوقت من السيرفر بعد. لا يمكن تشغيل الجدول أو حساب الوقت بدون Server Time.",
-      "warning"
-    );
+showServerToast(
+  "⚠️ Server time has not been received yet. The schedule cannot run without accurate server time.",
+  "error"
+);
+
   }
 }
 
@@ -318,9 +319,10 @@ async function singleSync(label: string) {
 
     // Toast بدل window.alert
     showServerToast(
-      "✅ تم استلام الوقت من السيرفر. الآن يمكن تشغيل الجدول وحساب التوقيت بناءً على Server Time.",
-      "success"
-    );
+  "✅ Server time received successfully. Schedules are now running with accurate timing.",
+  "success"
+);
+
   }
 
   notifySubscribers();
