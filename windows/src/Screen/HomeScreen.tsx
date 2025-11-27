@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import SmartPlayer from "../features/schedule/components/SmartPlayer";
 import { useScreenId } from "../features/schedule/hooks/useScreenId";
-import { echo, ReverbConnection, persistAuthTokenFromEvent } from "../echo";
+import { echo, persistAuthTokenFromEvent } from "../echo";
 import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlaylist";
 import {
   setNowPlaying,
@@ -23,6 +23,7 @@ import type { ChildPlaylistResponse } from "../types/schedule";
 import { currentNetMode, type NetMode } from "../utils/netHealth";
 import HeadlessWarmup from "../features/schedule/components/HeadlessWarmup";
 import type { PlaylistLoopHealthDetail } from "../features/schedule/hooks/usePlaylistHealth";
+import { useScreenDeletedGuardReverb } from "../features/schedule/hooks/useScreenDeletedGuardReverb"; // 👈 الجديد
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 type ScheduleUpdatePayload = {
@@ -46,7 +47,6 @@ async function warmPlaylistLight(
   const cancels: Array<() => void> = [];
   try {
     const slides = pl.slides as any[];
-    // أول شريحة + window بسيط
     const { prefetchSlideMedia, prefetchWindow } = await import(
       "../utils/mediaPrefetcher"
     );
@@ -65,6 +65,8 @@ const PREWARM_LEAD_MS = 10 * 60 * 1000;
 const HomeScreen: React.FC = () => {
   const qc = useQueryClient();
   const { screenId } = useScreenId();
+  // 👇 هنا نستدعي الـ hook الجديد
+  useScreenDeletedGuardReverb(screenId);
 
   const {
     parent,
@@ -81,6 +83,7 @@ const HomeScreen: React.FC = () => {
 
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
+
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -104,7 +107,7 @@ const HomeScreen: React.FC = () => {
     return () => window.clearInterval(id);
   }, []);
 
-  // Probe bandwidth مرة واحدة لما يكون في playlist مرشّحة
+  // Probe bandwidth
   useEffect(() => {
     const pl =
       (decision?.playlist as PlaylistT | null) ||
@@ -160,7 +163,6 @@ const HomeScreen: React.FC = () => {
 
   const blockTargetUntil = useRef<number>(0);
 
-  // Swap when target changes
   useEffect(() => {
     const targetHash = hashPlaylist(targetPlaylist as any);
     if (Date.now() < blockTargetUntil.current) return;
@@ -178,7 +180,6 @@ const HomeScreen: React.FC = () => {
       if (swapAbortRef.current.aborted) return;
       setNextReady(true);
 
-      // انتقال ناعم بين current و next
       setTimeout(() => {
         if (swapAbortRef.current.aborted) return;
         setCurrent(targetPlaylist);
@@ -193,7 +194,6 @@ const HomeScreen: React.FC = () => {
     };
   }, [targetPlaylist, netMode]);
 
-  // Save what is displayed (nowPlaying cache)
   useEffect(() => {
     if (!hasSlides(current)) return;
     const sameAsDecision =
@@ -229,7 +229,6 @@ const HomeScreen: React.FC = () => {
     }
   };
 
-  // Server push — refresh + log ONLY when events are received
   useEffect(() => {
     if (!screenId) return;
 
@@ -268,20 +267,38 @@ const HomeScreen: React.FC = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, quietRefreshAll]);
+  useEffect(() => {
+  // if (!screenId) return; // 👈 ضروري
 
-  // ✅ Save lastGoodChild من الـhealth hook بس لما اللفة نظيفة
+  const channelName = `screenDel.${screenId}`;
+  const channel = echo.channel(channelName);
+
+  const handler = (event: any) => {
+    console.log("Screen deleted event received:", event);
+    alert("Screen was deleted on the server.");
+  };
+
+  channel.listen("ScreenDeleted", handler);
+
+  // Cleanup
+  return () => {
+    try {
+      channel.stopListening("ScreenDeleted", handler);
+      echo.leave(channelName);
+    } catch (err) {
+      console.warn("[Reverb] cleanup error", err);
+    }
+  };
+}, [screenId]);
   useEffect(() => {
     const handler = (ev: Event) => {
       if (!hasSlides(current)) return;
 
       const detail = (ev as CustomEvent<PlaylistLoopHealthDetail>).detail;
       if (!detail) return;
-
-      // نهتم فقط بحالة child الفعّالة
       if ((decision as any)?.source !== "child") return;
 
       if (!detail.ok) {
-        // صار glitch بهاللفة → ما منحفظ
         if (process.env.NODE_ENV !== "production") {
           console.log("[PlaylistHealth] loop had glitch, skip save", detail);
         }
@@ -310,7 +327,6 @@ const HomeScreen: React.FC = () => {
     };
   }, [current, (decision as any)?.source]);
 
-  // أوفلاين: لو window انتهت نرجّع آخر Default
   useEffect(() => {
     if (typeof activeEndDelayMs !== "number") return;
     if (isOnline) return;
@@ -327,7 +343,6 @@ const HomeScreen: React.FC = () => {
     })();
   }, [activeEndDelayMs, isOnline, netMode]);
 
-  // بعد عودة النت: اعمل refresh بسيط
   useEffect(() => {
     if (!isOnline) return;
     (async () => {
@@ -340,7 +355,6 @@ const HomeScreen: React.FC = () => {
     })();
   }, [isOnline, netMode, activeScheduleId]);
 
-  // 🔥 Headless prewarm:
   const [enableUpcomingWarm, setEnableUpcomingWarm] = useState(false);
 
   useEffect(() => {
@@ -357,11 +371,8 @@ const HomeScreen: React.FC = () => {
   }, [nextStartDelayMs, upcomingPlaylist]);
 
   useEffect(() => {
-    // لو عندنا upcoming prewarm، ما نحتاج prewarm مستمر للـ target
     if (enableUpcomingWarm) return;
-
     if (!hasSlides(targetPlaylist)) return;
-    // prefetchWholePlaylist خفيف أثناء السطوع
     const cancel = prefetchWholePlaylist(targetPlaylist as any);
     return () => cancel();
   }, [enableUpcomingWarm, targetPlaylist]);
@@ -387,7 +398,6 @@ const HomeScreen: React.FC = () => {
 
   return (
     <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
-      {/* Headless warmup للـ upcoming (إذا قرب وقتها) */}
       {enableUpcomingWarm && hasSlides(upcomingPlaylist) && (
         <HeadlessWarmup
           playlist={upcomingPlaylist as any}
@@ -396,7 +406,6 @@ const HomeScreen: React.FC = () => {
         />
       )}
 
-      {/* أو fallback warmup للـ target */}
       {!enableUpcomingWarm && hasSlides(targetPlaylist) && (
         <HeadlessWarmup
           playlist={targetPlaylist as any}

@@ -6,6 +6,14 @@ type Cancel = () => void;
 const imageCache = new Set<string>();
 const videoCache = new Set<string>();
 
+/** 
+ * 🔵 ثوابت للتحكم بحجم الـ warm prefetch حسب جودة النت:
+ *  - PREFETCH_WARM_GOOD → 8MB (جودة جيدة)
+ *  - PREFETCH_WARM_POOR → 4MB (جودة ضعيفة / أبطأ)
+ */
+export const PREFETCH_WARM_GOOD = 8 * 1024 * 1024; // 8 MB
+export const PREFETCH_WARM_POOR = 4 * 1024 * 1024; // 4 MB
+
 /**
  * inflightFetches:
  *  - مفتاحها هو URL الميديا بعد normalize
@@ -94,9 +102,12 @@ export async function probeBandwidth(urlSample: string): Promise<number> {
 export function setAdaptiveVideoWarmRange(
   mode: "ONLINE_GOOD" | "ONLINE_SLOW" | "SERVER_DOWN" | "OFFLINE"
 ) {
-  if (mode === "ONLINE_GOOD") setVideoWarmRange(6 * 1024 * 1024); // 6 MB
-  else if (mode === "ONLINE_SLOW") setVideoWarmRange(8 * 1024 * 1024); // 8 MB
-  else setVideoWarmRange(3 * 1024 * 1024); // 3 MB
+  // ✅ لو النت جيد → 8MB، غير ذلك → 4MB ثابتة
+  if (mode === "ONLINE_GOOD") {
+    setVideoWarmRange(PREFETCH_WARM_GOOD);
+  } else {
+    setVideoWarmRange(PREFETCH_WARM_POOR);
+  }
 }
 
 /**

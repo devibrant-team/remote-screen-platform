@@ -5,6 +5,8 @@ import {
   setVideoWarmRange,
   prefetchWholePlaylist,
   normalizeMediaUrl,
+  PREFETCH_WARM_GOOD,
+  PREFETCH_WARM_POOR,
 } from "../../../utils/mediaPrefetcher";
 
 type Props = {
@@ -16,9 +18,12 @@ type Props = {
 
 /**
  * HeadlessWarmup
- * - يشغل prefetchWholePlaylist (fetch-based warmup).
- * - ينشئ عناصر <img>/<video> مخفية بعدد محدود.
- * - يستند لجودة الشبكة لتحديد سلوك تسخين الفيديو.
+ * - يشغل prefetchWholePlaylist (fetch-based warmup) → يحمّي كل child بالكامل.
+ * - ينشئ عناصر <img>/<video> مخفية تحت كل شيء (z-index منخفض + opacity:0).
+ * - يستند لجودة الشبكة لتحديد سلوك تسخين الفيديو (حجم الـ warm range).
+ * - الهدف: لما يجي وقت الـ child يكون:
+ *    - JSON playlist جاهز من React Query cache.
+ *    - الميديا محمّية في HTTP cache / memory.
  */
 export default function HeadlessWarmup({
   playlist,
@@ -36,23 +41,30 @@ export default function HeadlessWarmup({
       return;
     }
 
+    // 🔥 اختار حجم التسخين بناءً على جودة الشبكة
     const quality = getNetQuality();
 
     if (aggressive || quality === "POOR") {
-      setVideoWarmRange(512 * 1024); // 512KB
+      // شبكة ضعيفة أو aggressive → 4MB (PREFETCH_WARM_POOR)
+      setVideoWarmRange(PREFETCH_WARM_POOR);
     } else if (quality === "GOOD") {
-      setVideoWarmRange(256 * 1024); // 256KB
+      // شبكة جيدة → 8MB (PREFETCH_WARM_GOOD)
+      setVideoWarmRange(PREFETCH_WARM_GOOD);
     } else {
-      setVideoWarmRange(128 * 1024); // 128KB
+      // وسط بينهما → 4MB كحل وسط
+      setVideoWarmRange(PREFETCH_WARM_POOR);
     }
 
+    // 🔁 fetch-based warmup لكل الـ playlist
     const cancelPrefetch = prefetchWholePlaylist(playlist);
 
+    // DOM warmup (videos/images مخفية تحت)
     holder.innerHTML = "";
 
     const slides = playlist.slides || [];
     const created: Array<HTMLImageElement | HTMLVideoElement> = [];
 
+    // نحدّد عدد الفيديوهات المسموح وضعها في الـ DOM للتسخين
     const MAX_DOM_VIDEOS = aggressive ? 6 : 3;
     let videoCount = 0;
 
@@ -72,10 +84,14 @@ export default function HeadlessWarmup({
           v.muted = true;
           v.playsInline = true;
           v.src = url;
+          // نحطّه fullscreen لكن غير مرئي وتحت كل شيء
           v.style.position = "absolute";
-          v.style.width = "1px";
-          v.style.height = "1px";
+          v.style.inset = "0";
+          v.style.width = "100%";
+          v.style.height = "100%";
           v.style.opacity = "0";
+          v.style.pointerEvents = "none";
+          v.style.zIndex = "-1";
           holder.appendChild(v);
           created.push(v);
         } else {
@@ -108,6 +124,7 @@ export default function HeadlessWarmup({
     function maybeReady() {
       if (readyFired) return;
       const hasVideo = created.some((el) => el instanceof HTMLVideoElement);
+      // لو ما في فيديو أصلاً، أو مرّ نص maxMs → اعتبر التسخين كفاية
       if (!hasVideo || Date.now() - t0 > maxMs / 2) {
         fireReadyOnce();
       }
@@ -146,7 +163,16 @@ export default function HeadlessWarmup({
   return (
     <div
       ref={holderRef}
-      style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        pointerEvents: "none",
+        zIndex: -1, // 👈 تحت كل شيء
+        opacity: 0, // غير مرئي
+      }}
     />
   );
 }

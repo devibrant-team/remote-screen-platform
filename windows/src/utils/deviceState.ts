@@ -27,3 +27,10 @@ export async function loadDeviceState() {
 
   return { screenId, linked, token };
 }
+export function loadDeviceStateSync() {
+  const screenId = localStorage.getItem("screenId") || undefined;
+  const linked = localStorage.getItem("linked") === "1";
+  const token = localStorage.getItem("authToken") || undefined;
+
+  return { screenId, linked, token };
+}

@@ -110,7 +110,7 @@ export function usePlaylistHealth(opts: Options) {
     window.dispatchEvent(new CustomEvent("playlist:loop"));
 
     if (process.env.NODE_ENV !== "production") {
-      console.log("[PlaylistHealth] loop end", detail);
+    //   console.log("[PlaylistHealth] loop end", detail);
     }
 
     // نرجّع العداد لهاللفة الجديدة

@@ -188,3 +188,63 @@ export function subscribeScreenChannel(
     off();
   };
 }
+// في echo.ts — اختياري
+export function subscribeScreenDeletedChannel(
+  screenId: string | number | null | undefined,
+  onDeleted: (e: any) => void
+): Unsub {
+  if (screenId === null || screenId === undefined || screenId === "") {
+    console.warn("[Reverb] ❗ subscribeScreenDeletedChannel without screenId");
+    return () => {};
+  }
+
+  const idStr = String(screenId);
+  const channelName = `screens.${idStr}`;
+
+  console.log(`[Reverb] 🎧 Subscribing to ScreenDeleted on: ${channelName}`);
+
+  const handler = (e: any) => {
+    console.log(
+      `[Reverb] 🧨 ScreenDeleted received on ${channelName}`,
+      e
+    );
+    onDeleted(e);
+  };
+
+  let channel = echo.channel(channelName);
+  channel.listen(".ScreenDeleted", handler);
+
+  const off = ReverbConnection.onStatus((s) => {
+    if (s === "connected") {
+      console.log(
+        `[Reverb] 🔄 Reconnected — resubscribing ScreenDeleted on ${channelName}`
+      );
+      try {
+        echo.leave(channelName);
+        channel = echo.channel(channelName);
+        channel.listen(".ScreenDeleted", handler);
+      } catch (err) {
+        console.warn(
+          `[Reverb] ⚠ Failed to resubscribe ScreenDeleted on ${channelName}`,
+          err
+        );
+      }
+    }
+  });
+
+  return () => {
+    console.log(
+      `[Reverb] ❌ Unsubscribing ScreenDeleted from ${channelName}`
+    );
+    try {
+      channel.stopListening(".ScreenDeleted", handler);
+      echo.leave(channelName);
+    } catch (err) {
+      console.warn(
+        `[Reverb] ⚠ Error while unsubscribing ScreenDeleted from ${channelName}`,
+        err
+      );
+    }
+    off();
+  };
+}

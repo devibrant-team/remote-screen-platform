@@ -6,3 +6,4 @@ export const DefaultPlayListApi = `${http}showsdefault`
 export const SendStatusApi = `${http}status/`;
 
 export const TimeClockApi = `${http}servertime`;
+export const CheckScreenApi = `${http}checkscreen/`;
