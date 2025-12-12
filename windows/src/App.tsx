@@ -1,13 +1,13 @@
 import { HashRouter, Routes, Route } from "react-router-dom";
-import CreateScreen from "./components/CreateScreen/CreateScreen";
+import CreateScreen from "./Screen/CreateScreen/CreateScreen";
 import HomeScreen from "./Screen/HomeScreen";
-import { useStatusHeartbeat } from "./features/schedule/hooks/useStatusHeartbeat";
-import { useScreenCheckGuardApi } from "./Hook/useScreenCheckGuardApi";
+import { useStatusHeartbeat } from "./Hook/Device/useStatusHeartbeat";
+import { useScreenCheckGuardApi } from "./Hook/Device/useScreenCheckGuardApi";
 import { ServerClockToast } from "./components/Alret/ServerClockToast";
 
 export default function App() {
   useStatusHeartbeat();
-  // useScreenCheckGuardApi();
+  useScreenCheckGuardApi();
   return (
     <div className="w-screen h-screen overflow-hidden">
       <ServerClockToast />

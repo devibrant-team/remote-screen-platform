@@ -1,8 +1,8 @@
 // src/features/schedule/hooks/useScreenDeletedGuard.ts
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { echo } from "../../../echo";
-import { clearAllIguanaCaches } from "../../../utils/resetCaches";
+import { echo } from "../../echo";
+import { clearAllIguanaCaches } from "../../utils/resetCaches";
 
 function handleScreenDeletedGlobal(screenId: string | number) {
   console.log("[ScreenGuard] 🚨 handleScreenDeletedGlobal:", {

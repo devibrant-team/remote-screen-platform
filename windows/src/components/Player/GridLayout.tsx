@@ -1,6 +1,6 @@
-import type { PlaylistSlide, PlaylistSlot } from "../../../types/schedule";
+import type { PlaylistSlide, PlaylistSlot } from "../../types/schedule";
 import SlotMedia from "./SlotMedia";
-import { WidgetRenderer } from "../../../widgets/WidgetRenderer";
+import { WidgetRenderer } from "../widgets/WidgetRenderer";
 
 type GridSpec = { cols: number; rows: number };
 

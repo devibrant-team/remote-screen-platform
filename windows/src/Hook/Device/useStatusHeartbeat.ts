@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import axios from "axios";
-import { SendStatusApi } from "../../../Api/Api";
-import { loadDeviceState } from "../../../utils/deviceState";
+import { SendStatusApi } from "../../Api/Api";
+import { loadDeviceState } from "../../utils/deviceState";
 
 export function useStatusHeartbeat() {
   useEffect(() => {

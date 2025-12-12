@@ -1,13 +1,13 @@
 // src/features/schedule/components/HeadlessWarmup.tsx
 import { useEffect, useRef } from "react";
-import { getNetQuality } from "../../../utils/netQuality";
+import { getNetQuality } from "../../utils/netQuality";
 import {
   setVideoWarmRange,
   prefetchWholePlaylist,
   normalizeMediaUrl,
   PREFETCH_WARM_GOOD,
   PREFETCH_WARM_POOR,
-} from "../../../utils/mediaPrefetcher";
+} from "../../utils/mediaPrefetcher";
 
 type Props = {
   playlist?: { slides?: Array<{ slots: any[] }> };

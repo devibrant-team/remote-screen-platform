@@ -1,6 +1,6 @@
 // src/hooks/useScreenId.ts
 import { useEffect, useState } from "react";
-import { loadDeviceState } from "../../../utils/deviceState";
+import { loadDeviceState } from "../../utils/deviceState";
 
 export function useScreenId() {
   const [state, setState] = useState<{screenId?: string; linked?: boolean; token?: string}>({});

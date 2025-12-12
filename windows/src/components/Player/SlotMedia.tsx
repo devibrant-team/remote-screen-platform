@@ -1,4 +1,4 @@
-import type { PlaylistSlot } from "../../../types/schedule";
+import type { PlaylistSlot } from "../../types/schedule";
 
 type ScaleMode = "fit" | "fill" | "blur" | "original" | string;
 

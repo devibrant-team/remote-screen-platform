@@ -1,15 +1,15 @@
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import type { PlaylistSlide, ParentScheduleItem } from "../../../types/schedule";
+import type { PlaylistSlide, ParentScheduleItem } from "../../types/schedule";
 import {
   buildSchedulePlaylistTimeline,
   type SchedulePlaylistTimeline,
-} from "../../../utils/playlistTimeline";
+} from "../../utils/playlistTimeline";
 import {
   selectScheduleTimeline,
   setScheduleTimeline,
-} from "../../../Redux/scheduleTimelineSlice";
-import type { RootState } from "../../../../store";
+} from "../../Redux/scheduleTimelineSlice";
+import type { RootState } from "../../../store";
 
 type Args = {
   scheduleId?: number | string;

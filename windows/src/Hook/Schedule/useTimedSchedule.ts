@@ -3,10 +3,10 @@ import { useEffect, useState } from "react";
 import {
   useParentSchedules,
   pickScheduleId,
-} from "../../../ReactQuery/schedule/useParentSchedules";
-import type { ParentScheduleItem } from "../../../types/schedule";
-import { useServerClockStrict } from "../../../utils/useServerClockStrict";
-import { resolveActiveAndNext } from "../../../utils/scheduleTime";
+} from "../../ReactQuery/schedule/useParentSchedules";
+import type { ParentScheduleItem } from "../../types/schedule";
+import { useServerClockStrict } from "../../utils/useServerClockStrict";
+import { resolveActiveAndNext } from "../../utils/scheduleTime";
 
 export function useTimedSchedule(screenId?: string) {
   const parent = useParentSchedules(screenId);

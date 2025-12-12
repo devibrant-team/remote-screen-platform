@@ -1,9 +1,9 @@
 // src/hooks/useScreenCheckGuard.ts
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckScreenApi } from "../Api/Api";
-import { useScreenId } from "../features/schedule/hooks/useScreenId";
-import { clearAllIguanaCaches } from "../utils/resetCaches";
+import { CheckScreenApi } from "../../Api/Api";
+import { useScreenId } from "./useScreenId";
+import { clearAllIguanaCaches } from "../../utils/resetCaches";
 
 export function useScreenCheckGuardApi() {
   const { screenId } = useScreenId();

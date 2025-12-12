@@ -4,10 +4,10 @@ import { Swiper, SwiperSlide } from "swiper/react";
 import { EffectFade } from "swiper/modules";
 import type { Swiper as SwiperClass } from "swiper";
 import { useQueryClient } from "@tanstack/react-query";
-import { echo, ReverbConnection, persistAuthTokenFromEvent } from "../../../echo";
+import { echo, ReverbConnection, persistAuthTokenFromEvent } from "../../echo";
 import InteractiveSlide from "../interactive/InteractiveSlide";
 import { buttonsFor, type ButtonAction } from "../interactive/buttonRegistry";
-import type { InteractivePlaylistDTO } from "../../../types/interactive";
+import type { InteractivePlaylistDTO } from "../../types/interactive";
 
 export default function InteractivePlayer({
   playlist,

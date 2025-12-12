@@ -2,11 +2,11 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTimedSchedule } from "./useTimedSchedule";
-import { useChildPlaylist } from "../../../ReactQuery/schedule/useChildPlaylist";
-import { prefetchNextPlaylist } from "../../../ReactQuery/schedule/prefetchNextPlaylist";
-import { qk } from "../../../ReactQuery/queryKeys";
-import { fetchDefaultPlaylist } from "../../../ReactQuery/schedule/useDefaultPlaylist";
-import { useServerClockStrict } from "../../../utils/useServerClockStrict";
+import { useChildPlaylist } from "../../ReactQuery/schedule/useChildPlaylist";
+import { prefetchNextPlaylist } from "../../ReactQuery/schedule/prefetchNextPlaylist";
+import { qk } from "../../ReactQuery/queryKeys";
+import { fetchDefaultPlaylist } from "../../ReactQuery/schedule/useDefaultPlaylist";
+import { useServerClockStrict } from "../../utils/useServerClockStrict";
 
 export const LS_SCREEN_ID = "screenId";
 

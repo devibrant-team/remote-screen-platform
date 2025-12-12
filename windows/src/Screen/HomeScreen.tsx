@@ -4,10 +4,10 @@ import "swiper/css/effect-fade";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import SmartPlayer from "../features/schedule/components/SmartPlayer";
-import { useScreenId } from "../features/schedule/hooks/useScreenId";
+import SmartPlayer from "../components/Player/SmartPlayer";
+import { useScreenId } from "../Hook/Device/useScreenId";
 import { echo, persistAuthTokenFromEvent } from "../echo";
-import { useResolvedPlaylist } from "../features/schedule/hooks/useResolvedPlaylist";
+import { useResolvedPlaylist } from "../Hook/Player/useResolvedPlaylist";
 import {
   setNowPlaying,
   loadLastGoodDefault,
@@ -21,9 +21,11 @@ import {
 } from "../utils/mediaPrefetcher";
 import type { ChildPlaylistResponse } from "../types/schedule";
 import { currentNetMode, type NetMode } from "../utils/netHealth";
-import HeadlessWarmup from "../features/schedule/components/HeadlessWarmup";
-import type { PlaylistLoopHealthDetail } from "../features/schedule/hooks/usePlaylistHealth";
-import { useScreenDeletedGuardReverb } from "../features/schedule/hooks/useScreenDeletedGuardReverb"; // 👈 الجديد
+import HeadlessWarmup from "../components/Player/HeadlessWarmup";
+import type { PlaylistLoopHealthDetail } from "../Hook/Player/usePlaylistHealth";
+import { useScreenDeletedGuardReverb } from "../Hook/Device/useScreenDeletedGuardReverb";
+import NoSchedule from "../components/NoSchedule/NoSchedule";
+import LoadingScreen from "../components/Loading/LoadingScreen";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 type ScheduleUpdatePayload = {
@@ -360,18 +362,12 @@ const HomeScreen: React.FC = () => {
     return () => cancel();
   }, [enableUpcomingWarm, targetPlaylist]);
 
-  if (!screenId) {
-    return (
-      <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
-        Device not linked.
-      </main>
-    );
-  }
+
 
   if (!hasSlides(current) && isLoading) {
     return (
-      <main className="w-screen h-[100dvh] grid place-items-center bg-black text-white">
-        Loading…
+      <main className="w-screen h-[100dvh] grid place-items-center  text-white">
+        <LoadingScreen />
       </main>
     );
   }
@@ -432,10 +428,7 @@ const HomeScreen: React.FC = () => {
 
       {noRenderable && (
         <div className="absolute inset-0 grid place-items-center bg-black text-white">
-          <div className="text-center opacity-70">
-            <div className="text-2xl font-semibold">Devibrant Player</div>
-            <div className="text-sm mt-1">Preparing content…</div>
-          </div>
+          <NoSchedule />
         </div>
       )}
 

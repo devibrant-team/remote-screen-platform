@@ -4,26 +4,26 @@ import type {
   ChildPlaylistResponse,
   PlaylistSlide,
   ParentScheduleItem,
-} from "../../../types/schedule";
+} from "../../types/schedule";
 import { Swiper, SwiperSlide } from "swiper/react";
 import { EffectFade } from "swiper/modules";
 import type { Swiper as SwiperClass } from "swiper";
 import {
   prefetchSlideMedia,
   prefetchWindowSmart,
-} from "../../../utils/mediaPrefetcher";
+} from "../../utils/mediaPrefetcher";
 import {
   echo,
   ReverbConnection,
   persistAuthTokenFromEvent,
-} from "../../../echo";
+} from "../../echo";
 import { useQueryClient } from "@tanstack/react-query";
 import GridLayout from "./GridLayout";
-import { currentNetMode, type NetMode } from "../../../utils/netHealth";
+import { currentNetMode, type NetMode } from "../../utils/netHealth";
 import PlaylistDebugPanel from "./PlaylistDebugPanel";
-import { useSlideLogic } from "../hooks/useSlideLogic";
-import { useSchedulePlaylistTimeline } from "../hooks/useSchedulePlaylistTimeline";
-import { usePlaylistHealth } from "../hooks/usePlaylistHealth";
+import { useSlideLogic } from "../../Hook/Player/useSlideLogic"; 
+import { useSchedulePlaylistTimeline } from "../../Hook/Player/useSchedulePlaylistTimeline"; 
+import { usePlaylistHealth } from "../../Hook/Player/usePlaylistHealth";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 

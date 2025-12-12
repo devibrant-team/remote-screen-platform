@@ -3,7 +3,7 @@ import React from "react";
 import type {
   ChildPlaylistResponse,
   ParentScheduleItem,      // 👈 أضف هذي
-} from "../../../types/schedule";
+} from "../../types/schedule";
 import PlaylistPlayer from "./PlaylistPlayer";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];

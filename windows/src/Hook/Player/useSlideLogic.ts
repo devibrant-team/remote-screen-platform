@@ -1,6 +1,6 @@
 // src/features/schedule/hooks/useSlideLogic.ts
 import { useEffect, useMemo, useState } from "react";
-import { useServerClockStrict } from "../../../utils/useServerClockStrict";
+import { useServerClockStrict } from "../../utils/useServerClockStrict";
 
 function toSecs(hms: string) {
   const [h = "0", m = "0", s = "0"] = String(hms).split(":");

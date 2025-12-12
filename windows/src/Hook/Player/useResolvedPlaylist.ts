@@ -4,25 +4,25 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useChildPlaylist,
   fetchChildPlaylist,
-} from "../../../ReactQuery/schedule/useChildPlaylist";
+} from "../../ReactQuery/schedule/useChildPlaylist";
 import {
   useDefaultPlaylist,
   fetchDefaultPlaylist,
-} from "../../../ReactQuery/schedule/useDefaultPlaylist";
+} from "../../ReactQuery/schedule/useDefaultPlaylist";
 import {
   saveLastGoodDefault,
   loadLastGoodChild,
   loadLastGoodDefault,
   getNowPlaying,
-} from "../../../utils/playlistCache";
-import { prefetchWindow } from "../../../utils/mediaPrefetcher";
-import { qk } from "../../../ReactQuery/queryKeys";
-import { useServerClockStrict } from "../../../utils/useServerClockStrict";
-import { resolveActiveAndNext } from "../../../utils/scheduleTime";
+} from "../../utils/playlistCache";
+import { prefetchWindow } from "../../utils/mediaPrefetcher";
+import { qk } from "../../ReactQuery/queryKeys";
+import { useServerClockStrict } from "../../utils/useServerClockStrict";
+import { resolveActiveAndNext } from "../../utils/scheduleTime";
 import {
   useParentSchedules,
   pickScheduleId,
-} from "../../../ReactQuery/schedule/useParentSchedules";
+} from "../../ReactQuery/schedule/useParentSchedules";
 
 type Decision =
   | { source: "child"; playlist: any; reason: string }

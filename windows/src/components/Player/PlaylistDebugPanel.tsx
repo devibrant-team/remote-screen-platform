@@ -1,15 +1,15 @@
 // src/features/schedule/components/PlaylistDebugPanel.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import type { PlaylistSlide } from "../../../types/schedule";
-import { useServerClockStrict } from "../../../utils/useServerClockStrict";
+import type { PlaylistSlide } from "../../types/schedule";
+import { useServerClockStrict } from "../../utils/useServerClockStrict";
 import {
   loadLastGoodChild,
   loadLastGoodDefault,
-} from "../../../utils/playlistCache";
+} from "../../utils/playlistCache";
 import {
   buildPlaylistTimeline,
   type SchedulePlaylistTimeline,
-} from "../../../utils/playlistTimeline";
+} from "../../utils/playlistTimeline";
 
 type Props = {
   slides: PlaylistSlide[];
@@ -62,6 +62,54 @@ function secsToHHMMSSmmm(s: number) {
     `${String(ss).padStart(2, "0")}.` +
     `${String(ms).padStart(3, "0")}`
   );
+}
+
+// "23:00:10.000" -> seconds of day
+function timeStrToSec(str?: string | null): number | null {
+  if (!str) return null;
+  const [hms, msPart] = str.split(".");
+  const parts = (hms || "").split(":");
+  if (parts.length < 2) return null;
+  const hh = parseInt(parts[0] || "0", 10);
+  const mm = parseInt(parts[1] || "0", 10);
+  const ss = parseInt(parts[2] || "0", 10);
+  const ms = msPart ? parseInt(msPart.padEnd(3, "0").slice(0, 3), 10) : 0;
+  if ([hh, mm, ss, ms].some((n) => Number.isNaN(n))) return null;
+  return hh * 3600 + mm * 60 + ss + ms / 1000;
+}
+
+// نستخرج startSec / endSec من item سواء كانت أرقام أو سترنغ وقت
+function getItemSecs(item: any): { startSec: number | null; endSec: number | null } {
+  const rawStart =
+    item.startSec ??
+    item.startSeconds ??
+    item.start ??
+    item.startHHMMSSmmm;
+
+  const rawEnd =
+    item.endSec ??
+    item.endSeconds ??
+    item.end ??
+    item.endHHMMSSmmm;
+
+  const startSec =
+    typeof rawStart === "number" && Number.isFinite(rawStart)
+      ? rawStart
+      : typeof rawStart === "string"
+      ? timeStrToSec(rawStart)
+      : null;
+
+  const endSec =
+    typeof rawEnd === "number" && Number.isFinite(rawEnd)
+      ? rawEnd
+      : typeof rawEnd === "string"
+      ? timeStrToSec(rawEnd)
+      : null;
+
+  return {
+    startSec: startSec ?? null,
+    endSec: endSec ?? null,
+  };
 }
 
 // محاولة عامة لعدّ الميديا داخل الشريحة
@@ -174,19 +222,10 @@ const PlaylistDebugPanel: React.FC<Props> = ({
     return buildPlaylistTimeline(slides as any, childStartTime ?? undefined);
   }, [slides, childStartTime]);
 
-  // 🌀 معلومات الـ loops من scheduleTimeline
-  const loopInfo = useMemo(() => {
+  // 🌀 معلومات الـ schedule (start/end + loopsCount إن وجدت)
+  const scheduleInfo = useMemo(() => {
     if (!scheduleTimeline) return null;
     const st: any = scheduleTimeline;
-
-    const loops: any[] = Array.isArray(st.loops) ? st.loops : [];
-
-    const loopsCount =
-      typeof st.loopsCount === "number"
-        ? st.loopsCount
-        : typeof st.loopCount === "number"
-        ? st.loopCount
-        : loops.length || null;
 
     const scheduleStart =
       st.scheduleStartHHMMSS ??
@@ -196,140 +235,149 @@ const PlaylistDebugPanel: React.FC<Props> = ({
       null;
 
     const scheduleEnd =
-      st.scheduleEndHHMMSS ??
-      st.scheduleEnd ??
-      st.endHHMMSS ??
-      st.end ??
-      null;
+      st.scheduleEndHHMMSS ?? st.scheduleEnd ?? st.endHHMMSS ?? st.end ?? null;
 
-    const playlistStart =
-      st.playlistStartHHMMSS ?? st.playlistStart ?? null;
+    const playlistStart = st.playlistStartHHMMSS ?? st.playlistStart ?? null;
     const playlistEnd = st.playlistEndHHMMSS ?? st.playlistEnd ?? null;
 
-    return { st, loops, loopsCount, scheduleStart, scheduleEnd, playlistStart, playlistEnd };
+    const loopsCount =
+      typeof st.loopsCount === "number"
+        ? st.loopsCount
+        : typeof st.loopCount === "number"
+        ? st.loopCount
+        : null;
+
+    return { scheduleStart, scheduleEnd, playlistStart, playlistEnd, loopsCount };
   }, [scheduleTimeline]);
 
-  // 🔁 حدّد أي loop نحن فيه الآن حسب وقت السيرفر
+  // 📏 نحسب baseLoopStartSec + loopDurationSec من baseTimeline
+  const loopMeta = useMemo(() => {
+    if (!baseTimeline || !Array.isArray(baseTimeline.items) || !baseTimeline.items.length) {
+      return null;
+    }
+
+    const items: any[] = baseTimeline.items;
+    const first = items[0];
+    const last = items[items.length - 1];
+
+    const { startSec: start0 } = getItemSecs(first);
+    const { endSec: endLast } = getItemSecs(last);
+
+    if (
+      start0 == null ||
+      endLast == null ||
+      !Number.isFinite(start0) ||
+      !Number.isFinite(endLast) ||
+      endLast <= start0
+    ) {
+      return null;
+    }
+
+    const loopDurationSec = endLast - start0;
+
+    return {
+      baseLoopStartSec: start0,
+      loopDurationSec,
+    };
+  }, [baseTimeline]);
+
+  // 🔁 نحدّد loop index الحالي من وقت السيرفر + طول الـ loop
   useEffect(() => {
-    if (!loopInfo || !loopInfo.loops.length) {
+    if (!loopMeta) {
       setCurrentLoopIndex(null);
       return;
     }
 
-    const { loops } = loopInfo;
+    const { baseLoopStartSec, loopDurationSec } = loopMeta;
+    if (loopDurationSec <= 0) {
+      setCurrentLoopIndex(null);
+      return;
+    }
 
     const compute = () => {
       const nowSec = clock.nowSecs();
-      let found: number | null = null;
+      const delta = nowSec - baseLoopStartSec;
 
-      for (let i = 0; i < loops.length; i++) {
-        const L: any = loops[i];
-        const startSec: number =
-          typeof L.startSec === "number"
-            ? L.startSec
-            : typeof L.start === "number"
-            ? L.start
-            : 0;
-        const endSec: number =
-          typeof L.endSec === "number"
-            ? L.endSec
-            : typeof L.end === "number"
-            ? L.end
-            : 0;
-
-        // نعتبر inclusive من البداية، exclusive من النهاية
-        if (nowSec >= startSec && nowSec < endSec) {
-          found = i;
-          break;
-        }
+      if (delta < 0) {
+        setCurrentLoopIndex(0);
+        return;
       }
 
-      setCurrentLoopIndex(found);
+      const idx = Math.floor(delta / loopDurationSec);
+      setCurrentLoopIndex(idx); // ممكن يزيد بدون حد أعلى
     };
 
     compute();
     const id = window.setInterval(compute, 500);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loopInfo?.loops]);
+  }, [loopMeta]);
 
-  // ❗ slide timeline للـ loop الحالي إن وجد، وإلا fallback على baseTimeline
+  // ❗ slide timeline للـ loop الحالي: start/end يتحركوا مع كل loop
   const slideRows = useMemo(() => {
-    // لو ما في loops أو ما قدرنا نحدّد loop حالي → استخدم baseTimeline (loop واحد)
-    if (!loopInfo || !loopInfo.loops.length || currentLoopIndex == null) {
-      if (!baseTimeline) return [];
-      return baseTimeline.items.map((item: any, idx: number) => {
+    if (!baseTimeline || !Array.isArray(baseTimeline.items)) return [];
+    const items: any[] = baseTimeline.items;
+
+    // لا يوجد معلومات عن loop (نرجّع الـ loop الأول كما هو)
+    if (!loopMeta || currentLoopIndex == null) {
+      return items.map((item, idx) => {
         const sl = slides[idx];
         const d =
           typeof sl?.duration === "number" && Number.isFinite(sl.duration)
             ? sl.duration
             : null;
+
+        const { startSec, endSec } = getItemSecs(item);
+
+        const startStr =
+          item.startHHMMSSmmm ??
+          (startSec != null ? secsToHHMMSSmmm(startSec) : "—");
+
+        const endStr =
+          item.endHHMMSSmmm ??
+          (endSec != null ? secsToHHMMSSmmm(endSec) : "—");
+
         return {
           idx,
           loopIndex: null as number | null,
-          start: item.startHHMMSSmmm ?? "—",
-          end: item.endHHMMSSmmm ?? "—",
+          start: startStr,
+          end: endStr,
           duration: d,
         };
       });
     }
 
-    const loop = loopInfo.loops[currentLoopIndex];
-    if (!loop) return [];
-
-    const items: any[] =
-      Array.isArray(loop.items) && loop.items.length
-        ? loop.items
-        : Array.isArray(loop.slides)
-        ? loop.slides
-        : [];
-
-    if (!items.length) return [];
+    // عندنا loopIndex + loopDuration → نضيف offset على كل slide
+    const offsetSec = loopMeta.loopDurationSec * currentLoopIndex;
 
     return items.map((item, idx) => {
-      // قد يكون item يحمل index داخلي مختلف، بس هون للعرض فقط
-      const slideIdx =
-        typeof item.slideIndex === "number"
-          ? item.slideIndex
-          : typeof item.index === "number"
-          ? item.index
-          : idx;
-
-      const sl = slides[slideIdx];
+      const sl = slides[idx];
       const d =
         typeof sl?.duration === "number" && Number.isFinite(sl?.duration)
           ? sl.duration
           : null;
 
+      const { startSec, endSec } = getItemSecs(item);
+
       const startStr =
-        item.startHHMMSSmmm ??
-        item.startHHMMSS ??
-        (typeof item.startSec === "number"
-          ? secsToHHMMSSmmm(item.startSec)
-          : "—");
+        startSec != null ? secsToHHMMSSmmm(startSec + offsetSec) : "—";
 
       const endStr =
-        item.endHHMMSSmmm ??
-        item.endHHMMSS ??
-        (typeof item.endSec === "number"
-          ? secsToHHMMSSmmm(item.endSec)
-          : "—");
+        endSec != null ? secsToHHMMSSmmm(endSec + offsetSec) : "—";
 
       return {
-        idx: slideIdx,
+        idx,
         loopIndex: currentLoopIndex,
         start: startStr,
         end: endStr,
         duration: d,
       };
     });
-  }, [baseTimeline, slides, loopInfo, currentLoopIndex]);
+  }, [baseTimeline, slides, loopMeta, currentLoopIndex]);
 
-  // 🧩 السطر الحالي Start/End @server:
-  // لو في loop حالي نستخدم الـ item تبعه، وإلا fallback على baseTimeline
+  // 🧩 Start/End @server للـ slide الحالية (من slideRows مع offset)
   const timelineStartEnd = useMemo(() => {
-    // loop حالي + item مناسب
-    if (slideRows.length && currentLoopIndex != null) {
+    if (slideRows.length) {
       const currentRow = slideRows.find((r) => r.idx === activeIndex);
       if (currentRow) {
         return {
@@ -339,18 +387,25 @@ const PlaylistDebugPanel: React.FC<Props> = ({
       }
     }
 
-    // fallback: baseTimeline (loop الأول)
-    if (!baseTimeline) return { start: null as string | null, end: null as string | null };
+    // fallback: baseTimeline من غير offset
+    if (!baseTimeline)
+      return { start: null as string | null, end: null as string | null };
 
     const item =
       baseTimeline.items[logicEnabled ? logicIndex : activeIndex] ??
       baseTimeline.items[activeIndex];
 
+    const { startSec, endSec } = getItemSecs(item);
+
     return {
-      start: item?.startHHMMSSmmm ?? null,
-      end: item?.endHHMMSSmmm ?? null,
+      start:
+        item?.startHHMMSSmmm ??
+        (startSec != null ? secsToHHMMSSmmm(startSec) : null),
+      end:
+        item?.endHHMMSSmmm ??
+        (endSec != null ? secsToHHMMSSmmm(endSec) : null),
     };
-  }, [slideRows, currentLoopIndex, activeIndex, baseTimeline, logicEnabled, logicIndex]);
+  }, [slideRows, activeIndex, baseTimeline, logicEnabled, logicIndex]);
 
   const timelineStart = timelineStartEnd.start;
   const timelineEnd = timelineStartEnd.end;
@@ -408,15 +463,30 @@ const PlaylistDebugPanel: React.FC<Props> = ({
       ? `${(logicMsUntilNext / 1000).toFixed(3)}s`
       : "—";
 
+  // Playlist loops label (لو في loopsCount من السيرفر نعرضه)
   const loopsLabel = useMemo(() => {
-    if (!loopInfo || !loopInfo.loopsCount) return "—";
-    if (currentLoopIndex == null) return `${loopInfo.loopsCount}`;
-    return `${currentLoopIndex + 1} / ${loopInfo.loopsCount}`;
-  }, [loopInfo, currentLoopIndex]);
+    const loopsCount = scheduleInfo?.loopsCount;
+    if (currentLoopIndex == null && !loopsCount) return "—";
+    if (currentLoopIndex != null && !loopsCount) {
+      return `${currentLoopIndex + 1}`;
+    }
+    if (currentLoopIndex == null && loopsCount) {
+      return `${loopsCount}`;
+    }
+    return `${(currentLoopIndex ?? 0) + 1} / ${loopsCount}`;
+  }, [scheduleInfo, currentLoopIndex]);
 
-  const scheduleStartLabel =
-    loopInfo?.scheduleStart ?? childStartTime ?? (scheduleTimeline ? "—" : "—");
-  const scheduleEndLabel = loopInfo?.scheduleEnd ?? (scheduleTimeline ? "—" : "—");
+const scheduleStartLabel =
+  scheduleInfo?.scheduleStart ??
+  scheduleInfo?.playlistStart ??   // 👈 لو الـ hook يرجّع playlistStart
+  childStartTime ??
+  (scheduleTimeline ? "—" : "—");
+
+const scheduleEndLabel =
+  scheduleInfo?.scheduleEnd ??
+  scheduleInfo?.playlistEnd ??     // 👈 fallback على playlistEnd
+  (scheduleTimeline ? "—" : "—");
+
 
   return (
     <div className="pointer-events-none absolute top-3 right-3 z-50">
@@ -570,8 +640,10 @@ const PlaylistDebugPanel: React.FC<Props> = ({
 
         <div className="text-[10px] text-emerald-300 mb-0.5">
           Slides timeline{" "}
-          {currentLoopIndex != null && loopInfo?.loopsCount
-            ? `(loop ${currentLoopIndex + 1} / ${loopInfo.loopsCount})`
+          {currentLoopIndex != null
+            ? `(loop ${currentLoopIndex + 1}${
+                scheduleInfo?.loopsCount ? ` / ${scheduleInfo.loopsCount}` : ""
+              })`
             : "(1 loop)"}
         </div>
 
