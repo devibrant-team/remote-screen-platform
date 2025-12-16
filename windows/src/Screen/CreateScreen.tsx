@@ -1,7 +1,7 @@
 // src/features/screens/CreateScreen.tsx
 import { useEffect, useRef, useState } from "react";
-import { useCreateScreen } from "../../ReactQuery/CreateScreen/CreateScreen";
-import { echo } from "../../echo";
+import { useCreateScreen } from "../ReactQuery/CreateScreen/CreateScreen";
+import { echo } from "../echo";
 import { useNavigate } from "react-router-dom";
 
 /* ──────────────────────────────────────────────────────────────

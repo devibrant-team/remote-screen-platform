@@ -1,10 +1,10 @@
 import { HashRouter, Routes, Route } from "react-router-dom";
-import CreateScreen from "./Screen/CreateScreen/CreateScreen";
+import CreateScreen from "./Screen/CreateScreen";
 import HomeScreen from "./Screen/HomeScreen";
 import { useStatusHeartbeat } from "./Hook/Device/useStatusHeartbeat";
 import { useScreenCheckGuardApi } from "./Hook/Device/useScreenCheckGuardApi";
 import { ServerClockToast } from "./components/Alret/ServerClockToast";
-
+import "./index.css"
 export default function App() {
   useStatusHeartbeat();
   useScreenCheckGuardApi();
