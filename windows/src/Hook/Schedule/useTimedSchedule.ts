@@ -12,6 +12,7 @@ export function useTimedSchedule(screenId?: string) {
   const parent = useParentSchedules(screenId);
   const clock = useServerClockStrict();
 
+  // day = server date (YYYY-MM-DD)
   const day = parent.data?.date;
   const items: ParentScheduleItem[] = parent.data?.data ?? [];
 
@@ -34,12 +35,11 @@ export function useTimedSchedule(screenId?: string) {
 
     // ❗ لو السيرفر مش جاهز → ممنوع نعتمد على وقت الجهاز
     if (!clock.isReady()) {
-      // ما نغيّر الـ state الحالية، بس نخليها مثل ما هي لحد ما السيرفر يجهز
       return;
     }
 
     const nowSec = clock.nowSecs();
-    const { active: a, next: n } = resolveActiveAndNext(items, nowSec);
+    const { active: a, next: n } = resolveActiveAndNext(items, day, nowSec);
 
     setActive(a);
     setNext(n);
@@ -51,6 +51,8 @@ export function useTimedSchedule(screenId?: string) {
       nowSec,
       items: items.map((it) => ({
         scheduleId: pickScheduleId(it),
+        start_date: it.start_date ?? it.start_day,
+        end_date: it.end_date ?? it.start_date ?? it.start_day,
         start: it.start_time,
         end: it.end_time,
       })),
@@ -63,22 +65,17 @@ export function useTimedSchedule(screenId?: string) {
   useEffect(() => {
     if (!day || items.length === 0) return;
 
-    const id = setInterval(() => {
-      // لو ما في server time جاهز → ما نعمل ولا شي
+    const id = window.setInterval(() => {
       if (!clock.isReady()) return;
 
       const nowSec = clock.nowSecs();
-      const { active: a, next: n } = resolveActiveAndNext(items, nowSec);
+      const { active: a, next: n } = resolveActiveAndNext(items, day, nowSec);
       const newId = pickScheduleId(a) ?? undefined;
 
+      // eslint-disable-next-line no-console
       console.log("[SCHEDULE_TICK]", {
         day,
         nowSec,
-        items: items.map((it) => ({
-          scheduleId: pickScheduleId(it),
-          start: it.start_time,
-          end: it.end_time,
-        })),
         activeScheduleId: pickScheduleId(a),
         nextScheduleId: n ? pickScheduleId(n) : null,
       });
@@ -88,6 +85,7 @@ export function useTimedSchedule(screenId?: string) {
 
       setActiveScheduleId((oldId) => {
         if (oldId !== newId) {
+          // eslint-disable-next-line no-console
           console.log("[SCHEDULE_DEBUG] boundary hit", {
             day,
             nowSec,
@@ -99,7 +97,7 @@ export function useTimedSchedule(screenId?: string) {
       });
     }, 1000);
 
-    return () => clearInterval(id);
+    return () => window.clearInterval(id);
   }, [day, items, clock]);
 
   return {

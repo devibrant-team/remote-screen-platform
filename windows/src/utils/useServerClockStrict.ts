@@ -56,7 +56,7 @@ function toSecs(hms: string) {
  */
 function epochMsToDaySecs(epochMs: number, tz?: string | null): number {
   const d = new Date(epochMs);
-  const fracSec = ((epochMs % 1000) + 1000) % 1000 / 1000;
+  const fracSec = (((epochMs % 1000) + 1000) % 1000) / 1000;
 
   try {
     if (tz) {
@@ -152,11 +152,10 @@ function ensureServerOrAlert() {
     noServerTimeAlertShown = true;
 
     // Toast بدل window.alert
-showServerToast(
-  "⚠️ Server time has not been received yet. The schedule cannot run without accurate server time.",
-  "error"
-);
-
+    showServerToast(
+      "⚠️ Server time has not been received yet. The schedule cannot run without accurate server time.",
+      "error"
+    );
   }
 }
 
@@ -222,7 +221,7 @@ async function takeOneSampleNtp(): Promise<Sample | null> {
     }
 
     const delayMs = t3_epoch - t0_epoch - (t2 - t1);
-    const offsetMs = ((t1 - t0_epoch) + (t2 - t3_epoch)) / 2;
+    const offsetMs = (t1 - t0_epoch + (t2 - t3_epoch)) / 2;
     const rttMs = t3_perf - t0_perf;
 
     if (delayMs < 0 || delayMs > 3000) return null;
@@ -319,10 +318,9 @@ async function singleSync(label: string) {
 
     // Toast بدل window.alert
     showServerToast(
-  "✅ Server time received successfully. Schedules are now running with accurate timing.",
-  "success"
-);
-
+      "✅ Server time received successfully. Schedules are now running with accurate timing.",
+      "success"
+    );
   }
 
   notifySubscribers();
@@ -343,7 +341,6 @@ function ensureEngineStarted() {
 
   const { screenId, linked, token } = loadDeviceStateSync();
   if (!linked || !screenId || !token) {
-    engineStarted = true;
     return;
   }
 
@@ -384,12 +381,17 @@ function ensureEngineStarted() {
 
 export function useServerClockStrict() {
   const [, forceRender] = useState(0);
-
   useEffect(() => {
     ensureEngineStarted();
+
+    const onLinked = () => ensureEngineStarted();
+    window.addEventListener("iguana:linked", onLinked);
+
     const cb = () => forceRender((x) => x + 1);
     subscribers.add(cb);
+
     return () => {
+      window.removeEventListener("iguana:linked", onLinked);
       subscribers.delete(cb);
     };
   }, []);

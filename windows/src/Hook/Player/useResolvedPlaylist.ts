@@ -18,7 +18,7 @@ import {
 import { prefetchWindow } from "../../utils/mediaPrefetcher";
 import { qk } from "../../ReactQuery/queryKeys";
 import { useServerClockStrict } from "../../utils/useServerClockStrict";
-import { resolveActiveAndNext } from "../../utils/scheduleTime";
+import { resolveActiveAndNext, toSecs } from "../../utils/scheduleTime";
 import {
   useParentSchedules,
   pickScheduleId,
@@ -49,6 +49,33 @@ function pickFirstDefined<T = any>(
   return undefined;
 }
 
+/* ---------- Date+Time helpers (server-based) ---------- */
+function daysBetween(a: string, b: string) {
+  const A = new Date(a + "T00:00:00Z").getTime();
+  const B = new Date(b + "T00:00:00Z").getTime();
+  return Math.round((B - A) / 86400000);
+}
+
+// نفس فكرة smart للـ drift
+function msUntilDateTimeSmart(
+  clock: ReturnType<typeof useServerClockStrict>,
+  today: string | undefined,
+  targetDate?: string | null,
+  targetTime?: string | null
+): number | undefined {
+  if (!today || !targetDate || !targetTime) return undefined;
+  if (!clock.isReady()) return undefined;
+
+  const nowSec = clock.nowSecs();
+  const targetSec = toSecs(targetTime);
+
+  const dayDiff = daysBetween(today, targetDate);
+  const rawMs = dayDiff * 86400000 + (targetSec - nowSec) * 1000;
+
+  if (rawMs < 0 && rawMs > -300) return 0;
+  return rawMs;
+}
+
 export function useResolvedPlaylist(screenId?: string) {
   const qc = useQueryClient();
   const clock = useServerClockStrict();
@@ -68,43 +95,39 @@ export function useResolvedPlaylist(screenId?: string) {
     return () => clearInterval(id);
   }, []);
 
-  // ثواني اليوم من ساعة السيرفر فقط
-  // (لو السيرفر مش جاهز، ممنوع نستعمل وقت جهاز → ما نحسب active/next أصلاً)
+  // active/next حسب (date + time) من السيرفر
   const { active, next } = useMemo(() => {
     if (!day || items.length === 0) {
       return { active: undefined, next: null };
     }
 
     if (!clock.isReady()) {
-      // ما في server time جاهز → نعتبر ما في active schedule
       return { active: undefined, next: null };
     }
 
     const nowSec = clock.nowSecs();
-    const res = resolveActiveAndNext(items, nowSec);
-
-    // console.log("[SCHEDULE_DEBUG] useResolvedPlaylist", {
-    //   day,
-    //   nowSec,
-    //   activeId: pickScheduleId(res.active),
-    //   nextId: pickScheduleId(res.next),
-    // });
-
-    return res;
+    return resolveActiveAndNext(items, day, nowSec);
   }, [day, items, timeTick, clock]);
 
   const activeScheduleId = pickScheduleId(active) ?? undefined;
   const nextScheduleId = pickScheduleId(next) ?? undefined;
 
-  /* ── تأخيرات مبنية على ساعة السيرفر فقط ── */
+  /* ── تأخيرات مبنية على ساعة السيرفر فقط (date+time) ── */
   const activeEndDelayMs: number | undefined = (() => {
+    if (!active) return undefined;
     const endTime = pickStr(active, "end_time");
-    return endTime ? clock.msUntil(endTime) : undefined;
+    const endDate =
+      (active as any).end_date ??
+      (active as any).start_date ??
+      (active as any).start_day;
+    return msUntilDateTimeSmart(clock, day, endDate, endTime);
   })();
 
   const nextStartDelayMs: number | undefined = (() => {
+    if (!next) return undefined;
     const startTime = pickStr(next, "start_time");
-    return startTime ? clock.msUntil(startTime) : undefined;
+    const startDate = (next as any).start_date ?? (next as any).start_day;
+    return msUntilDateTimeSmart(clock, day, startDate, startTime);
   })();
 
   /* ── Live child query (للـ active schedule) ───────────────── */
@@ -143,12 +166,12 @@ export function useResolvedPlaylist(screenId?: string) {
       .prefetchQuery({
         queryKey: qk.child(activeScheduleId, screenId),
         queryFn: () => fetchChildPlaylist(activeScheduleId, screenId),
-        staleTime: 60_000, // نفس staleTime تبع useChildPlaylist
+        staleTime: 60_000,
       })
       .catch(() => {});
   }, [activeScheduleId, screenId, qc]);
 
-  /* ── Prefetch child القادم قبل 30 ثانية من بداية الـ schedule ─────────── */
+  /* ── Prefetch child القادم قبل 30 ثانية من بداية الـ schedule (date+time) ─────────── */
   useEffect(() => {
     if (!next) return;
     if (!screenId) return;
@@ -156,12 +179,13 @@ export function useResolvedPlaylist(screenId?: string) {
 
     const sid = nextScheduleId;
     const startTime = pickStr(next, "start_time");
-    if (!sid || !startTime) return;
+    const startDate = (next as any).start_date ?? (next as any).start_day;
+    if (!sid || !startTime || !startDate) return;
 
-    const rawMs = clock.msUntil(startTime);
+    const rawMs = msUntilDateTimeSmart(clock, day, startDate, startTime);
     if (rawMs == null) return;
 
-    const PREFETCH_LEAD_MS = 30_000; // 30 ثانية قبل start
+    const PREFETCH_LEAD_MS = 30_000;
     const delay = Math.max(0, rawMs - PREFETCH_LEAD_MS);
 
     let timer: number | undefined;
@@ -171,21 +195,18 @@ export function useResolvedPlaylist(screenId?: string) {
         .prefetchQuery({
           queryKey: qk.child(sid, screenId),
           queryFn: () => fetchChildPlaylist(sid, screenId),
-          staleTime: 60_000, // 👈 يظل Fresh لغاية بداية الـ window
+          staleTime: 60_000,
         })
         .catch(() => {});
     };
 
-    if (delay === 0) {
-      arm();
-    } else {
-      timer = window.setTimeout(arm, delay);
-    }
+    if (delay === 0) arm();
+    else timer = window.setTimeout(arm, delay);
 
     return () => {
       if (timer) window.clearTimeout(timer);
     };
-  }, [next, nextScheduleId, screenId, clock, qc]);
+  }, [next, nextScheduleId, screenId, clock, qc, day]);
 
   const upcomingPlaylist = useMemo(() => {
     return pickFirstDefined<any>(next, ["playlist", "child"]) ?? null;
@@ -207,7 +228,6 @@ export function useResolvedPlaylist(screenId?: string) {
     const runningIsChild =
       running && running.source === "child" && hasSlides(running.playlist);
 
-    // A) ما في schedule فعّال → نشتغل default فقط
     if (!hasActiveSchedule) {
       if (hasSlides(liveDefault)) {
         return {
@@ -225,11 +245,7 @@ export function useResolvedPlaylist(screenId?: string) {
         };
       }
 
-      if (
-        running &&
-        running.source === "default" &&
-        hasSlides(running.playlist)
-      ) {
+      if (running && running.source === "default" && hasSlides(running.playlist)) {
         return {
           source: "cache",
           playlist: running.playlist,
@@ -244,9 +260,8 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // B) في schedule فعّال (child window)
+    // B) في schedule فعّال
 
-    // B-1) live child جاهز
     if (hasSlides(liveChild)) {
       return {
         source: "child",
@@ -255,9 +270,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // B-2) السيرفر واقع / child فاضي → حاول تحافظ على child قدر الإمكان
-
-    // 1) nowPlaying من نوع child
     if (runningIsChild) {
       return {
         source: "cache",
@@ -266,7 +278,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 2) lastGoodChild من الكاش
     if (hasSlides(cachedChild?.playlist)) {
       return {
         source: "cache",
@@ -275,7 +286,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 3) default live
     if (hasSlides(liveDefault)) {
       return {
         source: "default",
@@ -284,7 +294,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 4) default cached
     if (hasSlides(cachedDefault?.playlist)) {
       return {
         source: "cache",
@@ -293,7 +302,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 5) أي nowPlaying
     if (runningHasSlides) {
       return {
         source: "cache",
@@ -302,7 +310,6 @@ export function useResolvedPlaylist(screenId?: string) {
       };
     }
 
-    // 6) ولا شيء
     return {
       source: "empty",
       playlist: null,
@@ -326,9 +333,7 @@ export function useResolvedPlaylist(screenId?: string) {
 
   const activeScheduleIdFinal = activeScheduleId;
 
-  const quietRefreshAll = async (
-    overrideScheduleId?: number | string | null
-  ) => {
+  const quietRefreshAll = async (overrideScheduleId?: number | string | null) => {
     const sid = overrideScheduleId ?? activeScheduleIdFinal ?? undefined;
     const parentKey = qk.parent(screenId);
     const childKey = sid != null ? qk.child(sid, screenId) : null;

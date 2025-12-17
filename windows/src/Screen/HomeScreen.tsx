@@ -85,6 +85,11 @@ const HomeScreen: React.FC = () => {
 
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
+const canWriteNowPlaying = () => {
+  const linked = localStorage.getItem("linked") === "1";
+  const token = localStorage.getItem("authToken");
+  return linked && !!token;
+};
 
 
   useEffect(() => {
@@ -197,6 +202,7 @@ const HomeScreen: React.FC = () => {
   }, [targetPlaylist, netMode]);
 
   useEffect(() => {
+    if (!canWriteNowPlaying()) return;
     if (!hasSlides(current)) return;
     const sameAsDecision =
       hasSlides(decision.playlist as any) &&
@@ -270,11 +276,6 @@ const HomeScreen: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId, quietRefreshAll]);
 
-
-
-
-
-
   useEffect(() => {
     const handler = (ev: Event) => {
       if (!hasSlides(current)) return;
@@ -293,13 +294,13 @@ const HomeScreen: React.FC = () => {
       try {
         saveLastGoodChild(current as any);
         if (process.env.NODE_ENV !== "production") {
-          console.log(
-            "[PlaylistHealth] ✅ saved lastGoodChild from clean loop",
-            {
-              loopIndex: detail.loopIndex,
-              scheduleId: detail.scheduleId,
-            }
-          );
+          // console.log(
+          //   "[PlaylistHealth] ✅ saved lastGoodChild from clean loop",
+          //   {
+          //     loopIndex: detail.loopIndex,
+          //     scheduleId: detail.scheduleId,
+          //   }
+          // );
         }
       } catch (e) {
         console.log("[PlaylistHealth] saveLastGoodChild error", e);
@@ -324,7 +325,9 @@ const HomeScreen: React.FC = () => {
       await warmPlaylistLight(def!, winCount, 500);
       setCurrent(def!);
       currentHash.current = hashPlaylist(def as any);
-      setNowPlaying("default", def!);
+        if (canWriteNowPlaying()) {
+      setNowPlaying("default", def!); // ✅ guarded
+    }
     })();
   }, [activeEndDelayMs, isOnline, netMode]);
 
@@ -361,8 +364,6 @@ const HomeScreen: React.FC = () => {
     const cancel = prefetchWholePlaylist(targetPlaylist as any);
     return () => cancel();
   }, [enableUpcomingWarm, targetPlaylist]);
-
-
 
   if (!hasSlides(current) && isLoading) {
     return (

@@ -23,32 +23,52 @@ export default function InteractivePlayer({
   onRequestRefetch?: () => void;
 }) {
   const qc = useQueryClient();
+
   const slides = useMemo(
-    () => [...(playlist?.slides ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)),
+    () =>
+      [...(playlist?.slides ?? [])].sort(
+        (a, b) => (a.index ?? 0) - (b.index ?? 0)
+      ),
     [playlist?.slides]
   );
 
-  const [activeIndex, setActiveIndex] = useState(initialIndex);
+  // ✅ safe initial index
+  const safeInitial = useMemo(() => {
+    if (!slides.length) return 0;
+    const n = Number(initialIndex);
+    if (!Number.isFinite(n)) return 0;
+    return Math.min(Math.max(0, n), slides.length - 1);
+  }, [initialIndex, slides.length]);
+
+  const [activeIndex, setActiveIndex] = useState(safeInitial);
+  const activeIndexRef = useRef(safeInitial);
   const swiperRef = useRef<SwiperClass | null>(null);
+
+  useEffect(() => {
+    setActiveIndex(safeInitial);
+    activeIndexRef.current = safeInitial;
+    swiperRef.current?.slideTo?.(safeInitial, 0);
+  }, [safeInitial]);
 
   const slideTo = (idx: number) => {
     if (!slides.length) return;
     const target = (idx + slides.length) % slides.length;
+    activeIndexRef.current = target;
     setActiveIndex(target);
     swiperRef.current?.slideTo(target);
   };
-  const next = () => slideTo(activeIndex + 1);
-  const prev = () => slideTo(activeIndex - 1);
 
-  // keep index safe
+  const next = () => slideTo(activeIndexRef.current + 1);
+  const prev = () => slideTo(activeIndexRef.current - 1);
+
+  // keep index safe when slides change
   useEffect(() => {
     if (!slides.length) return;
     if (activeIndex >= slides.length) {
       const safe = Math.max(0, slides.length - 1);
-      if (safe !== activeIndex) {
-        setActiveIndex(safe);
-        swiperRef.current?.slideTo(safe, 0);
-      }
+      activeIndexRef.current = safe;
+      setActiveIndex(safe);
+      swiperRef.current?.slideTo(safe, 0);
     } else {
       swiperRef.current?.update?.();
     }
@@ -76,7 +96,9 @@ export default function InteractivePlayer({
       const idx = (activeIndex + i) % len;
       load(slides[idx]?.media);
     }
-    return () => { loaders.length = 0; };
+    return () => {
+      loaders.length = 0;
+    };
   }, [activeIndex, slides]);
 
   // Actions
@@ -97,16 +119,15 @@ export default function InteractivePlayer({
     }
     if (typeof a === "string" && a.startsWith("open:")) {
       const url = a.slice("open:".length);
-      try { window.open(url, "_blank"); } catch {}
+      try {
+        window.open(url, "_blank");
+      } catch {}
       return;
     }
-    if (a === "playVideo") {
-      // no-op for now (wire later if you add hidden video layers)
-      return;
-    }
+    if (a === "playVideo") return;
   };
 
-  // Reverb: controls + reload
+  // ✅ Reverb: لا تربطها بـ activeIndex حتى ما تعمل re-subscribe كل مرة
   useEffect(() => {
     if (!screenId && !scheduleId) return;
 
@@ -119,15 +140,23 @@ export default function InteractivePlayer({
       };
       const handleNext = () => next();
       const handlePrev = () => prev();
+
       const handleReload = (e: any) => {
         persistAuthTokenFromEvent(e);
         if (onRequestRefetch) return onRequestRefetch();
+
         if (screenId) {
-          qc.invalidateQueries({ queryKey: ["parentSchedules", String(screenId)], refetchType: "active" });
+          qc.invalidateQueries({
+            queryKey: ["parentSchedules", String(screenId)],
+            refetchType: "active",
+          });
         }
         const sid = e?.scheduleId ?? scheduleId;
         if (sid && screenId) {
-          qc.invalidateQueries({ queryKey: ["childPlaylist", String(sid), String(screenId)], refetchType: "active" });
+          qc.invalidateQueries({
+            queryKey: ["childPlaylist", String(sid), String(screenId)],
+            refetchType: "active",
+          });
         }
       };
 
@@ -167,9 +196,13 @@ export default function InteractivePlayer({
       unsubs.forEach((u) => u && u());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenId, scheduleId, activeIndex, onRequestRefetch, qc]);
+  }, [screenId, scheduleId, onRequestRefetch, qc]);
 
   if (!slides.length) return null;
+
+  // ✅ Fallback للـ style / ids حتى ما buttonsFor تفجّر
+  const safeStyle = (playlist as any)?.style ?? "default";
+  const safePlaylistId = (playlist as any)?.id ?? 0;
 
   return (
     <div className="w-screen h-[100dvh] bg-black text-white overflow-hidden">
@@ -177,32 +210,57 @@ export default function InteractivePlayer({
         modules={[EffectFade]}
         effect="fade"
         fadeEffect={{ crossFade: true }}
-        onSwiper={(sw) => { swiperRef.current = sw; sw.slideTo(initialIndex); }}
-        onSlideChange={(sw) => setActiveIndex(sw.activeIndex)}
+        onSwiper={(sw) => {
+          swiperRef.current = sw;
+          sw.slideTo(safeInitial, 0);
+        }}
+        onSlideChange={(sw) => {
+          activeIndexRef.current = sw.activeIndex;
+          setActiveIndex(sw.activeIndex);
+        }}
         allowTouchMove={false}
         keyboard={{ enabled: false }}
         speed={400}
-        initialSlide={initialIndex}
+        initialSlide={safeInitial}
         observer
         observeParents
         resizeObserver={true as any}
         className="w-full h-full"
       >
-        {slides.map((s) => (
-          <SwiperSlide key={s.id} className="!w-full !h-full">
-            <InteractiveSlide
-              slide={{ id: s.id, index: s.index, url: s.media, mediaId: s.media_id }}
-              buttons={buttonsFor({
-                style: playlist.style as any,
-                index: s.index,
-                playlistId: playlist.id,
-                mediaId: s.media_id,
-                
-              })}
-              onAction={runAction}
-            />
-          </SwiperSlide>
-        ))}
+        {slides.map((s) => {
+          let buttons: any[] = [];
+          try {
+            buttons = buttonsFor({
+              style: safeStyle as any,
+              index: Number(s.index ?? 0),
+              playlistId: safePlaylistId,
+              mediaId: s.media_id ?? 0,
+            });
+          } catch (err) {
+            console.error("[InteractivePlayer] buttonsFor crash:", err, {
+              style: safeStyle,
+              index: s.index,
+              playlistId: safePlaylistId,
+              mediaId: s.media_id,
+            });
+            buttons = [];
+          }
+
+          return (
+            <SwiperSlide key={s.id} className="!w-full !h-full">
+              <InteractiveSlide
+                slide={{
+                  id: s.id,
+                  index: s.index,
+                  url: s.media,
+                  mediaId: s.media_id,
+                }}
+                buttons={buttons}
+                onAction={runAction}
+              />
+            </SwiperSlide>
+          );
+        })}
       </Swiper>
     </div>
   );

@@ -30,13 +30,13 @@ type WeatherData = {
 const posClass = (p?: WidgetConf["position"]) => {
   switch ((p || "center").toLowerCase()) {
     case "top-left":
-      return "top-6 left-6";
+      return "top-1 left-1";
     case "top-right":
-      return "top-6 right-6";
+      return "top-1 right-1";
     case "bottom-left":
-      return "bottom-6 left-6";
+      return "bottom-1 left-1";
     case "bottom-right":
-      return "bottom-6 right-6";
+      return "bottom-1 right-1";
     case "center":
     default:
       return "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2";
@@ -46,16 +46,18 @@ const posClass = (p?: WidgetConf["position"]) => {
 const widthClass = (size?: WidgetConf["size"]) => {
   switch (size) {
     case "md":
-      return "w-[min(92vw,900px)]";
+      return "w-[min(78vw,340px)]";
     case "lg":
-      return "w-[min(94vw,1200px)]";
+      return "w-[min(80vw,420px)]";
     case "full":
-      return "w-[min(98vw,2200px)]";
+      return "w-[min(86vw,560px)]";
     case "xl":
     default:
-      return "w-[min(96vw,1800px)]";
+      return "w-[min(82vw,480px)]";
   }
 };
+
+
 
 const ringFromAccent: Record<NonNullable<WidgetConf["accent"]>, string> = {
   slate: "ring-white/10",
@@ -291,7 +293,7 @@ function ClockWidget({ widget }: { widget: WidgetConf }) {
           "shadow-2xl shadow-black/40",
           "ring-1",
           ringFromAccent[widget.accent ?? "slate"],
-          "px-6 sm:px-10 lg:px-14 py-8 sm:py-10 lg:py-12",
+"px-4 sm:px-6 lg:px-8 py-4 sm:py-5 lg:py-6",
           "text-white text-center",
         ].join(" ")}
       >
@@ -306,14 +308,14 @@ function ClockWidget({ widget }: { widget: WidgetConf }) {
         <div
           className={[
             "font-extrabold select-none tracking-tight",
-            "text-[clamp(52px,12vw,320px)] leading-none",
+"text-[clamp(38px,8.5vw,180px)] leading-none",
             "drop-shadow-[0_6px_18px_rgba(0,0,0,0.25)]",
           ].join(" ")}
           style={{ fontVariantNumeric: "tabular-nums" }}
         >
           {time}
         </div>
-        <div className="mt-3 text-[clamp(14px,2.4vw,28px)] opacity-90">
+<div className="mt-2 text-[clamp(12px,2vw,18px)] opacity-90">
           {date}
         </div>
         {city ? (
@@ -412,7 +414,7 @@ function WeatherWidget({ widget }: { widget: WidgetConf }) {
 
         <div className="flex items-center justify-center gap-5 mb-4">
           {(data?.iconUrl || !loading) && (
-            <div className="hidden sm:flex items-center justify-center rounded-lg ring-1 ring-white/15 bg-white/10 w-[clamp(42px,6.2vw,64px)] h-[clamp(42px,6.2vw,64px)]">
+            <div className="hidden sm:flex items-center justify-center rounded-lg ring-1 ring-white/15 bg-white/10 w-[clamp(34px,5vw,52px)] h-[clamp(34px,5vw,52px)]">
               {data?.iconUrl && !iconBroken ? (
                 <img
                   src={data.iconUrl}
@@ -431,7 +433,8 @@ function WeatherWidget({ widget }: { widget: WidgetConf }) {
           <div
             className={[
               "font-extrabold select-none tracking-tight",
-              "text-[clamp(52px,12vw,300px)] leading-none",
+              "text-[clamp(38px,8.5vw,170px)] leading-none",
+
               "drop-shadow-[0_6px_18px_rgba(0,0,0,0.25)]",
             ].join(" ")}
             style={{ fontVariantNumeric: "tabular-nums" }}

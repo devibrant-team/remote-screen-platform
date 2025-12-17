@@ -1,4 +1,3 @@
-// src/utils/resetCaches.ts
 import type { QueryClient } from "@tanstack/react-query";
 
 const LS_KEYS_TO_CLEAR = [
@@ -12,6 +11,18 @@ const LS_KEYS_TO_CLEAR = [
   "pusherTransportTLS",
 ];
 
+const LS_PREFIXES_TO_CLEAR = [
+  "nowPlaying",        // catches nowPlaying*, nowPlayingPlaylist*, etc
+  "iguana:nowPlaying", // if you namespace
+];
+
+function clearMatchingLocalStorage(prefixes: string[]) {
+  const keys = Object.keys(localStorage);
+  for (const k of keys) {
+    if (prefixes.some((p) => k.startsWith(p))) localStorage.removeItem(k);
+  }
+}
+
 export async function clearAllIguanaCaches(qc?: QueryClient) {
   // 1) React Query cache
   try {
@@ -24,10 +35,11 @@ export async function clearAllIguanaCaches(qc?: QueryClient) {
     console.warn("[RESET] React Query clear error", e);
   }
 
-  // 2) localStorage keys تبعنا فقط
+  // 2) localStorage
   try {
     LS_KEYS_TO_CLEAR.forEach((k) => localStorage.removeItem(k));
-    console.log("[RESET] localStorage keys cleared", LS_KEYS_TO_CLEAR);
+    clearMatchingLocalStorage(LS_PREFIXES_TO_CLEAR);
+    console.log("[RESET] localStorage cleared");
   } catch (e) {
     console.warn("[RESET] localStorage clear error", e);
   }
@@ -43,11 +55,16 @@ export async function clearAllIguanaCaches(qc?: QueryClient) {
     console.warn("[RESET] SW cache clear error", e);
   }
 
-  // 4) bridge الاختياري تبع Electron / native (لو موجود)
+  // 4) bridge
   try {
     const api = (window as any)?.signage;
-    api?.resetDevice?.().catch?.(() => {});
+    await api?.resetDevice?.().catch?.(() => {});
   } catch (e) {
     console.warn("[RESET] bridge resetDevice error", e);
   }
+
+  // 5) IMPORTANT: prevent SmartPlayer/HomeScreen effects from re-saving nowPlaying
+  try {
+    window.location.reload();
+  } catch {}
 }
