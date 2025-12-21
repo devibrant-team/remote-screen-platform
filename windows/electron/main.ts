@@ -8,6 +8,10 @@ import { pipeline } from "node:stream";
 import { promisify } from "node:util";
 const streamPipeline = promisify(pipeline);
 
+// ✅ Auto update
+import log from "electron-log";
+import { autoUpdater } from "electron-updater";
+
 const MEDIA_DIR = path.join(app.getPath("userData"), "media-cache");
 const INDEX_FILE = path.join(MEDIA_DIR, "index.json");
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
@@ -41,11 +45,13 @@ function sizeOf(file: string) {
 function totalSize(ix: IndexMap) {
   return Object.values(ix).reduce((a, r) => a + (r.s || 0), 0);
 }
+
 export interface DeviceState {
   code?: string;
   screenId?: string;
   [key: string]: unknown;
 }
+
 async function evictIfNeeded(ix: IndexMap) {
   let sz = totalSize(ix);
   if (sz <= MAX_BYTES) return;
@@ -67,6 +73,10 @@ async function downloadToFile(url: string, dst: string) {
   const file = fs.createWriteStream(dst);
   await streamPipeline(res.body as any, file);
 }
+
+/* ──────────────────────────────────────────────────────────────
+   IPC: media cache
+────────────────────────────────────────────────────────────── */
 
 ipcMain.handle("media-cache:map", async (_evt, urls: string[]) => {
   ensureDir();
@@ -97,6 +107,10 @@ ipcMain.handle("media-cache:map", async (_evt, urls: string[]) => {
   return results;
 });
 
+/* ──────────────────────────────────────────────────────────────
+   electron-store (dynamic import) - same as your code
+────────────────────────────────────────────────────────────── */
+
 type StoreInstance<T extends Record<string, unknown>> = {
   get<K extends keyof T & string>(key: K): T[K] | undefined;
   set<K extends keyof T & string>(key: K, value: T[K]): void;
@@ -126,46 +140,127 @@ async function ensureCode() {
   if (!store.get("code")) store.set("code", sixDigitCode());
 }
 
+/* ──────────────────────────────────────────────────────────────
+   ✅ Auto Update setup (electron-updater)
+────────────────────────────────────────────────────────────── */
+
+function setupAutoUpdate() {
+  // logger
+  log.transports.file.level = "info";
+  autoUpdater.logger = log;
+
+  // settings
+  autoUpdater.autoDownload = true;
+
+  const send = (payload: any) => {
+    try {
+      win?.webContents.send("updater:event", payload);
+    } catch {}
+  };
+
+  autoUpdater.on("checking-for-update", () => send({ type: "checking" }));
+  autoUpdater.on("update-available", (info) =>
+    send({ type: "available", info })
+  );
+  autoUpdater.on("update-not-available", (info) => send({ type: "none", info }));
+  autoUpdater.on("download-progress", (p) =>
+    send({
+      type: "progress",
+      percent: p.percent,
+      transferred: p.transferred,
+      total: p.total,
+      bytesPerSecond: p.bytesPerSecond,
+    })
+  );
+  autoUpdater.on("update-downloaded", (info) =>
+    send({ type: "downloaded", info })
+  );
+  autoUpdater.on("error", (err) =>
+    send({ type: "error", message: err?.message || String(err) })
+  );
+
+  ipcMain.handle("updater:check", async () => {
+    if (!app.isPackaged) return { ok: false, reason: "not_packaged" };
+    try {
+      const r = await autoUpdater.checkForUpdates();
+      return { ok: true, info: r?.updateInfo };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("updater:install", async () => {
+    if (!app.isPackaged) return { ok: false, reason: "not_packaged" };
+    try {
+      autoUpdater.quitAndInstall(true, true);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Window
+────────────────────────────────────────────────────────────── */
+
 async function createWindow() {
   await ensureCode();
-win = new BrowserWindow({
-  width: 1000,
-  height: 700,
-  icon: path.join(process.cwd(), "src/assets/IgaunaIcon.ico"),
-  webPreferences: {
-    preload: path.join(__dirname, "preload.cjs"),
-    contextIsolation: true,
-    nodeIntegration: false,
-  },
-});
 
+  win = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    icon: path.join(process.cwd(), "src/assets/IgaunaIcon.ico"),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
 
   if (isDev && process.env.ELECTRON_START_URL) {
     await win.loadURL(process.env.ELECTRON_START_URL);
   } else {
     await win.loadFile(path.join(app.getAppPath(), "dist", "index.html"));
   }
+
+  // ✅ Start auto updater AFTER window is ready
+  if (!isDev) {
+    setupAutoUpdate();
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }, 4000);
+  }
+
   win.on("closed", () => (win = null));
 }
 
 app.whenReady().then(createWindow);
+
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
+
+/* ──────────────────────────────────────────────────────────────
+   IPC: device state
+────────────────────────────────────────────────────────────── */
 
 ipcMain.handle("signage:getDeviceState", async () => {
   const store = await getStore();
   const { code, screenId } = store.store;
   return { code, screenId } as DeviceState;
 });
+
 ipcMain.handle("signage:saveScreenId", async (_e, screenId: string) => {
   const store = await getStore();
   store.set("screenId", screenId);
   return { ok: true };
 });
+
 ipcMain.handle("signage:resetDevice", async () => {
   const store = await getStore();
   store.clear();

@@ -4,22 +4,33 @@ import { contextBridge, ipcRenderer } from "electron";
 type DeviceState = { code?: number | string; screenId?: string };
 
 const signage = {
-  // Read both code & screenId from main (electron-store lives in main)
   getDeviceState: (): Promise<DeviceState> =>
     ipcRenderer.invoke("signage:getDeviceState"),
 
-  // Persist screenId to main/electron-store
   saveScreenId: (screenId: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("signage:saveScreenId", screenId),
 
-  // Clear device data (code & screenId) in main/electron-store
   resetDevice: (): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("signage:resetDevice"),
 };
 
-contextBridge.exposeInMainWorld("signage", signage);
-contextBridge.exposeInMainWorld('mediaCache', {
-  mapToLocal: async (urls: string[]): Promise<Record<string,string>> => {
-    return ipcRenderer.invoke('media-cache:map', urls);
+const mediaCache = {
+  mapToLocal: async (urls: string[]): Promise<Record<string, string>> => {
+    return ipcRenderer.invoke("media-cache:map", urls);
   },
-});
+};
+
+// ✅ Auto Update bridge
+const updater = {
+  check: (): Promise<any> => ipcRenderer.invoke("updater:check"),
+  install: (): Promise<any> => ipcRenderer.invoke("updater:install"),
+  onEvent: (cb: (payload: any) => void) => {
+    const handler = (_: any, payload: any) => cb(payload);
+    ipcRenderer.on("updater:event", handler);
+    return () => ipcRenderer.removeListener("updater:event", handler);
+  },
+};
+
+contextBridge.exposeInMainWorld("signage", signage);
+contextBridge.exposeInMainWorld("mediaCache", mediaCache);
+contextBridge.exposeInMainWorld("updater", updater);
