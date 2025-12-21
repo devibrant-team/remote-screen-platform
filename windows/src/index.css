@@ -1,11 +1,38 @@
+/* src/index.css */
 @import "tailwindcss";
-
 
 html, body, #root {
   height: 100%;
   width: 100%;
   margin: 0;
-  
-  overflow: hidden;          /* no scrollbars on signage */
+  overflow: hidden;
 }
 * { box-sizing: border-box; }
+
+/* ✅ default landscape */
+html.screen-landscape #root {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  transform: none;
+}
+
+/* ✅ portrait = rotate whole app 90deg */
+html.screen-portrait #root {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+
+  /* swap because rotated */
+  width: 100vh;
+  height: 100vw;
+
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
+
+  overflow: hidden;
+}
+
+/* optional: attribute hook */
+html[data-screen-type="landscape"] {}
+html[data-screen-type="portrait"] {}

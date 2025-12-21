@@ -1,3 +1,4 @@
+// src/App.tsx
 import { HashRouter, Routes, Route } from "react-router-dom";
 import { useEffect } from "react";
 import toast, { Toaster } from "react-hot-toast";
@@ -8,11 +9,19 @@ import { useStatusHeartbeat } from "./Hook/Device/useStatusHeartbeat";
 import { useScreenCheckGuardApi } from "./Hook/Device/useScreenCheckGuardApi";
 import { ServerClockToast } from "./components/Alret/ServerClockToast";
 
+// ✅ Screen type hooks
+import { useScreenTypeApiWeb } from "./Hook/Device/useScreenTypeApiWeb";
+import { useScreenTypeReverbWeb } from "./Hook/Device/useScreenTypeReverbWeb";
+
 import "./index.css";
 
 export default function App() {
   useStatusHeartbeat();
   useScreenCheckGuardApi();
+
+  // ✅ Apply initial type from API then listen live from Reverb
+  useScreenTypeApiWeb();
+  useScreenTypeReverbWeb();
 
   useEffect(() => {
     const w = window as any;
@@ -29,7 +38,6 @@ export default function App() {
       }
       if (e.type === "downloaded") {
         toast.success("Update downloaded. Restarting to install...");
-        // ✅ auto install (restart)
         w.updater.install();
       }
       if (e.type === "error") toast.error(`Update error: ${e.message}`);

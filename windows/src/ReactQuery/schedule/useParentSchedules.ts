@@ -51,11 +51,13 @@ export function useActiveSchedule(screenId?: string) {
   // snapshot من ساعة السيرفر
   const nowSec = clock.nowSecs();
 
-  const { active, next } = useMemo(() => {
-    if (!date)
-      return { active: undefined, next: null as ParentScheduleItem | null };
-    return resolveActiveAndNext(items, nowSec);
-  }, [date, items, nowSec]);
+const { active, next } = useMemo(() => {
+  if (!date)
+    return { active: undefined, next: null as ParentScheduleItem | null };
+
+  return resolveActiveAndNext(items, date, nowSec);
+}, [date, items, nowSec]);
+
 
   const activeScheduleId = active
     ? (pickScheduleId(active) ?? undefined)

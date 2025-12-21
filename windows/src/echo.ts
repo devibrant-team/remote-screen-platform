@@ -248,3 +248,106 @@ export function subscribeScreenDeletedChannel(
     off();
   };
 }
+
+
+// ✅ NEW: ScreenType (portrait/landscape) channel: screenty.{screenCode}
+export type ScreenType = "portrait" | "landscape" | string;
+
+function normalizeScreenType(v: any): ScreenType {
+  const t = String(v ?? "").trim().toLowerCase();
+  if (!t) return "";
+  if (t === "portrait" || t === "p") return "portrait";
+  if (t === "landscape" || t === "l") return "landscape";
+  return t;
+}
+
+export function subscribeScreenTypeChannel(
+  screenCode: string | number | null | undefined,
+  onType: (type: ScreenType, payload: any) => void
+): Unsub {
+  if (screenCode === null || screenCode === undefined || screenCode === "") {
+    console.warn("[Reverb] ❗ subscribeScreenTypeChannel without screenCode");
+    return () => {};
+  }
+
+  const codeStr = String(screenCode).trim();
+  const channelName = `screenty.${codeStr}`;
+
+  console.log(`[Reverb] 🎧 Subscribing to ScreenType on: ${channelName}`);
+  console.log("[Reverb] conn status now:", ReverbConnection.status);
+
+  const handler = (e: any) => {
+    const type = normalizeScreenType(e?.type);
+    console.log(`[Reverb] 🧭 EVENT on ${channelName}`, e);
+    console.log(`[Reverb] 🧭 normalized type:`, type);
+    if (type) onType(type, e);
+  };
+
+  let channel: any = echo.channel(channelName);
+
+  // ✅ subscription diagnostics
+  try {
+    channel.bind?.("pusher:subscription_succeeded", () => {
+      console.log(`[Reverb] ✅ subscription_succeeded ${channelName}`);
+    });
+    channel.bind?.("pusher:subscription_error", (err: any) => {
+      console.log(`[Reverb] ❌ subscription_error ${channelName}`, err);
+    });
+  } catch {}
+
+  // ✅ listen to multiple names temporarily (until you confirm broadcastAs)
+  channel.listen(".ScreenType", handler);
+  channel.listen("ScreenType", handler);
+  channel.listen("ScreenTypeChanged", handler);
+
+  const off = ReverbConnection.onStatus((s) => {
+    if (s === "connected") {
+      console.log(
+        `[Reverb] 🔄 Reconnected — resubscribing ScreenType on ${channelName}`
+      );
+      try {
+        echo.leave(channelName);
+
+        channel = echo.channel(channelName);
+
+        // re-bind diagnostics
+        try {
+          channel.bind?.("pusher:subscription_succeeded", () => {
+            console.log(`[Reverb] ✅ subscription_succeeded (re) ${channelName}`);
+          });
+          channel.bind?.("pusher:subscription_error", (err: any) => {
+            console.log(`[Reverb] ❌ subscription_error (re) ${channelName}`, err);
+          });
+        } catch {}
+
+        channel.listen(".ScreenType", handler);
+        channel.listen("ScreenType", handler);
+        channel.listen("ScreenTypeChanged", handler);
+
+        console.log(`[Reverb] ✅ Resubscribed ScreenType on ${channelName}`);
+      } catch (err) {
+        console.warn(
+          `[Reverb] ⚠ Failed to resubscribe ScreenType on ${channelName}`,
+          err
+        );
+      }
+    }
+  });
+
+  return () => {
+    console.log(`[Reverb] ❌ Unsubscribing ScreenType from ${channelName}`);
+    try {
+      channel.stopListening(".ScreenType", handler);
+      channel.stopListening("ScreenType", handler);
+      channel.stopListening("ScreenTypeChanged", handler);
+      echo.leave(channelName);
+    } catch (err) {
+      console.warn(
+        `[Reverb] ⚠ Error while unsubscribing ScreenType from ${channelName}`,
+        err
+      );
+    }
+    off();
+  };
+}
+

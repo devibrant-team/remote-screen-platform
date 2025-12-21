@@ -7,3 +7,4 @@ export const SendStatusApi = `${http}status/`;
 
 export const TimeClockApi = `${http}servertime`;
 export const CheckScreenApi = `${http}checkscreen/`;
+export const GetRotationApi = `${http}showrotation/`;
