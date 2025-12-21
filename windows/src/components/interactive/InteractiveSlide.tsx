@@ -52,7 +52,7 @@ export default function InteractiveSlide({
   const btns = useMemo(() => buttons ?? [], [buttons]);
 
   return (
-    <div className="relative w-full h-full bg-black overflow-hidden select-none">
+    <div className="relative w-full h-full bg-white overflow-hidden select-none">
       <img
         src={slide.url}
         alt={String(slide.mediaId)}

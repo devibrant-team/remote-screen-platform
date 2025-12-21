@@ -205,7 +205,7 @@ export default function InteractivePlayer({
   const safePlaylistId = (playlist as any)?.id ?? 0;
 
   return (
-    <div className="w-screen h-[100dvh] bg-black text-white overflow-hidden">
+    <div className="w-screen h-[100dvh] bg-white text-white overflow-hidden">
       <Swiper
         modules={[EffectFade]}
         effect="fade"

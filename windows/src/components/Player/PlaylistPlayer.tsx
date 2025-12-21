@@ -459,7 +459,7 @@ export default function PlaylistPlayer({
   if (!slides.length) return null;
 
   return (
-    <div className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
+    <div className="relative w-screen h-[100dvh] bg-white text-white overflow-hidden">
       {/* Debug Panel: يعرض وقت السيرفر + مدة الشريحة + كل تفاصيل التوقيت */}
       <PlaylistDebugPanel
         slides={slides as PlaylistSlide[]}
@@ -477,7 +477,7 @@ export default function PlaylistPlayer({
 
       {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
       <div
-        className={`pointer-events-none absolute inset-0 bg-black transition-opacity duration-150 ${
+        className={`pointer-events-none absolute inset-0 bg-white transition-opacity duration-150 ${
           showOverlay ? "opacity-30" : "opacity-0"
         }`}
       />
@@ -537,7 +537,7 @@ export default function PlaylistPlayer({
       >
         {slides.map((s: PlaylistSlide) => (
           <SwiperSlide key={s.id} className="!w-full !h-full">
-            <div className="w-full h-full bg-black">
+            <div className="w-full h-full bg-white">
               <GridLayout
                 slide={s}
                 onVideoRef={(el) => registerVideo(s.id, el)}

@@ -72,11 +72,19 @@ export type PlaylistSlot = {
 export type PlaylistSlide = {
   id: number;
   transition: string;
-  duration: number;       // seconds
+  duration: number;
   index: number;
-  grid_style: number;
+
+  // ✅ backend fields
+  grid_id?: number;
+  grid_type?: string | null;
+
+  // ✅ optional (sometimes present)
+  grid_style?: number;
+
   slots: PlaylistSlot[];
 };
+
 
 export type ChildPlaylistResponse = {
   success: boolean;

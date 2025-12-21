@@ -377,7 +377,7 @@ const canWriteNowPlaying = () => {
     !hasSlides(current) && (!hasSlides(nextPl) || !nextReady);
 
   return (
-    <main className="relative w-screen h-[100dvh] bg-black text-white overflow-hidden">
+    <main className="relative w-screen h-[100dvh] bg-white text-white overflow-hidden">
       {enableUpcomingWarm && hasSlides(upcomingPlaylist) && (
         <HeadlessWarmup
           playlist={upcomingPlaylist as any}
@@ -428,12 +428,12 @@ const canWriteNowPlaying = () => {
       )}
 
       {noRenderable && (
-        <div className="absolute inset-0 grid place-items-center bg-black text-white">
+        <div className="absolute inset-0 grid place-items-center bg-white text-white">
           <NoSchedule />
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-0 bg-black/0" />
+      <div className="pointer-events-none absolute inset-0 bg-white/0" />
     </main>
   );
 };

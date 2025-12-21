@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, powerSaveBlocker } from "electron";
 import path from "node:path";
 
 import fs from "node:fs";
@@ -131,6 +131,49 @@ async function getStore(): Promise<StoreInstance<DeviceState>> {
 let win: BrowserWindow | null = null;
 const isDev = !app.isPackaged;
 
+/* ──────────────────────────────────────────────────────────────
+   ✅ NEW: Keep Awake (prevent sleep)
+────────────────────────────────────────────────────────────── */
+
+let psbId: number | null = null;
+
+function startKeepAwake() {
+  try {
+    if (psbId != null && powerSaveBlocker.isStarted(psbId)) return;
+    // prevent-display-sleep: prevents display sleep (and usually system sleep)
+    psbId = powerSaveBlocker.start("prevent-display-sleep");
+    log.info("powerSaveBlocker started", psbId);
+  } catch (e) {
+    log.error("powerSaveBlocker start error", e);
+  }
+}
+
+function stopKeepAwake() {
+  try {
+    if (psbId != null && powerSaveBlocker.isStarted(psbId)) {
+      powerSaveBlocker.stop(psbId);
+      log.info("powerSaveBlocker stopped", psbId);
+    }
+  } catch {}
+  psbId = null;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   ✅ NEW: Auto Launch on OS start (Windows/macOS)
+────────────────────────────────────────────────────────────── */
+
+function setupAutoLaunch() {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      // openAsHidden: true, // enable if you want hidden start
+    });
+    log.info("Auto-launch enabled");
+  } catch (e) {
+    log.error("Auto-launch setup error", e);
+  }
+}
+
 function sixDigitCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -201,25 +244,69 @@ function setupAutoUpdate() {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Window
+   ✅ Window
+   - NEW: Fullscreen on open
+   - NEW: Hide menu + disable devtools in build
+   - Keep devtools in dev
 ────────────────────────────────────────────────────────────── */
 
 async function createWindow() {
   await ensureCode();
 
+  // ✅ NEW: enable auto-launch + keep-awake
+  setupAutoLaunch();
+  startKeepAwake();
+
   win = new BrowserWindow({
     width: 1000,
     height: 700,
     icon: path.join(process.cwd(), "src/assets/IgaunaIcon.ico"),
+
+    // ✅ NEW: Fullscreen on open
+    fullscreen: true,
+
+    // ✅ NEW: Hide menu bar
+    autoHideMenuBar: true,
+
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+
+      // ✅ NEW: In build: block opening DevTools
+      devTools: isDev,
     },
+  });
+
+  // ✅ NEW: Remove menu in build only
+  if (!isDev) {
+    win.removeMenu();
+  }
+
+  // ✅ NEW: Force fullscreen after ready (some Windows need this)
+  win.once("ready-to-show", () => {
+    try {
+      win?.setFullScreen(true);
+    } catch {}
+  });
+
+  // ✅ NEW: Block DevTools shortcuts in build (F12 / Ctrl+Shift+I)
+  win.webContents.on("before-input-event", (event, input) => {
+    if (isDev) return;
+
+    const key = (input.key || "").toLowerCase();
+    const isF12 = key === "f12";
+    const isCtrlShiftI = input.control && input.shift && key === "i";
+
+    if (isF12 || isCtrlShiftI) {
+      event.preventDefault();
+    }
   });
 
   if (isDev && process.env.ELECTRON_START_URL) {
     await win.loadURL(process.env.ELECTRON_START_URL);
+    // ✅ Dev only (optional):
+    // win.webContents.openDevTools({ mode: "detach" });
   } else {
     await win.loadFile(path.join(app.getAppPath(), "dist", "index.html"));
   }
@@ -237,7 +324,13 @@ async function createWindow() {
 
 app.whenReady().then(createWindow);
 
+// ✅ NEW: stop keep-awake on quit
+app.on("before-quit", () => {
+  stopKeepAwake();
+});
+
 app.on("window-all-closed", () => {
+  stopKeepAwake();
   if (process.platform !== "darwin") app.quit();
 });
 
