@@ -351,3 +351,72 @@ export function subscribeScreenTypeChannel(
   };
 }
 
+export function subscribeScreenRefreshChannel(
+  screenId: string | number | null | undefined,
+  onRefresh: (payload: any) => void
+): Unsub {
+  if (screenId === null || screenId === undefined || screenId === "") {
+    console.warn("[Reverb] subscribeScreenRefreshChannel without screenId");
+    return () => {};
+  }
+
+  const idStr = String(screenId).trim();
+  const channelName = `screenref.${idStr}`;
+
+  console.log(`[Reverb] 🎧 Subscribing ScreenRefresh: ${channelName}`);
+  console.log("[Reverb] conn status now:", ReverbConnection.status);
+
+  const handler = (e: any) => {
+    console.log(`[Reverb] 🔄 ScreenRefresh on ${channelName}`, e);
+    onRefresh(e);
+  };
+
+  let ch: any = null;
+  let cancelled = false;
+
+  (async () => {
+    try {
+      // ✅ ensures first subscribe happens when socket is ready
+      await ReverbConnection.waitUntilConnected(15000);
+      if (cancelled) return;
+
+      ch = echo.channel(channelName);
+
+      // ✅ diagnostics
+      try {
+        ch.bind?.("pusher:subscription_succeeded", () => {
+          console.log(`[Reverb] ✅ subscription_succeeded ${channelName}`);
+        });
+        ch.bind?.("pusher:subscription_error", (err: any) => {
+          console.log(`[Reverb] ❌ subscription_error ${channelName}`, err);
+        });
+      } catch {}
+
+      // ✅ listen (keep both 1 day; then remove the extra)
+      ch.listen(".ScreenRefresh", handler);
+      ch.listen("ScreenRefresh", handler);
+    } catch (err) {
+      console.log(`[Reverb] 💥 ScreenRefresh subscribe failed ${channelName}`, err);
+    }
+  })();
+
+  // ✅ log reconnect (optional but useful)
+  const off = ReverbConnection.onStatus((s) => {
+    if (s === "connected") {
+      console.log(`[Reverb] 🔄 Reconnected — ScreenRefresh still on ${channelName}`);
+    }
+  });
+
+  return () => {
+    cancelled = true;
+    console.log(`[Reverb] ❌ Unsub ScreenRefresh: ${channelName}`);
+    try {
+      ch?.stopListening?.(".ScreenRefresh", handler);
+      ch?.stopListening?.("ScreenRefresh", handler);
+    } catch {}
+    try {
+      echo.leave(channelName);
+    } catch {}
+    off();
+  };
+}

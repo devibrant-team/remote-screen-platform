@@ -1,7 +1,7 @@
 {
   "name": "windows",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.7",
   "description": "Windows Screen Iguana",
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -19,12 +19,9 @@
     "tsc:watch": "tsc -p electron/tsconfig.json --watch",
     "electron:start": "wait-on http://localhost:5173 dist-electron/main.cjs && cross-env ELECTRON_START_URL=http://localhost:5173 electron dist-electron/main.cjs",
     "build:web": "vite build",
-
     "pack": "npm run build:web && npm run tsc:build && electron-builder --win nsis --publish never",
     "build": "npm run pack",
-
     "publish:win": "npm run build:web && npm run tsc:build && electron-builder --win nsis --publish always",
-
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -37,6 +34,7 @@
     "electron-store": "^10.1.0",
     "electron-updater": "^6.6.2",
     "laravel-echo": "^2.2.0",
+    "lucide-react": "^0.562.0",
     "pusher-js": "^8.4.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -70,7 +68,6 @@
     "appId": "com.devibrant.windows-iguana",
     "productName": "Windows Screen Iguana",
     "artifactName": "Windows-Screen-Iguana-Setup-${version}.${ext}",
-
     "publish": [
       {
         "provider": "github",
@@ -79,7 +76,6 @@
         "releaseType": "release"
       }
     ],
-
     "files": [
       "dist/**",
       "dist-electron/**",

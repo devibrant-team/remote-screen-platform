@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, ipcMain, powerSaveBlocker } from "electron";
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, globalShortcut  } from "electron";
 import path from "node:path";
 
 import fs from "node:fs";
@@ -130,6 +130,62 @@ async function getStore(): Promise<StoreInstance<DeviceState>> {
 
 let win: BrowserWindow | null = null;
 const isDev = !app.isPackaged;
+function registerAppShortcuts(isDev: boolean) {
+  try {
+    // -------------------
+    // Quit / Close
+    // -------------------
+    globalShortcut.register("CommandOrControl+Q", () => {
+      log.info("Shortcut: Quit (Ctrl/Cmd+Q)");
+      app.quit();
+    });
+
+    globalShortcut.register("CommandOrControl+Shift+Q", () => {
+      log.info("Shortcut: Quit (Ctrl/Cmd+Shift+Q)");
+      app.quit();
+    });
+
+    // -------------------
+    // Reload / Force Reload
+    // -------------------
+    globalShortcut.register("CommandOrControl+R", () => {
+      if (!win || win.isDestroyed()) return;
+      log.info("Shortcut: Reload (Ctrl/Cmd+R)");
+      win.webContents.reload();
+    });
+
+    globalShortcut.register("CommandOrControl+Shift+R", () => {
+      if (!win || win.isDestroyed()) return;
+      log.info("Shortcut: Force Reload (Ctrl/Cmd+Shift+R)");
+      // ignore cache + reload
+      win.webContents.reloadIgnoringCache();
+    });
+
+    // Optional: F5 / Ctrl+F5 (common on Windows)
+    globalShortcut.register("F5", () => {
+      if (!win || win.isDestroyed()) return;
+      log.info("Shortcut: Reload (F5)");
+      win.webContents.reload();
+    });
+
+    globalShortcut.register("CommandOrControl+F5", () => {
+      if (!win || win.isDestroyed()) return;
+      log.info("Shortcut: Force Reload (Ctrl+F5)");
+      win.webContents.reloadIgnoringCache();
+    });
+
+    log.info("App shortcuts registered");
+  } catch (e) {
+    log.error("Failed to register shortcuts", e);
+  }
+}
+
+function unregisterAppShortcuts() {
+  try {
+    globalShortcut.unregisterAll();
+    log.info("App shortcuts unregistered");
+  } catch {}
+}
 
 /* ──────────────────────────────────────────────────────────────
    ✅ NEW: Keep Awake (prevent sleep)
@@ -322,11 +378,16 @@ async function createWindow() {
   win.on("closed", () => (win = null));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  registerAppShortcuts(isDev);
+  await createWindow();
+});
 
 // ✅ NEW: stop keep-awake on quit
 app.on("before-quit", () => {
+  unregisterAppShortcuts();
   stopKeepAwake();
+
 });
 
 app.on("window-all-closed", () => {

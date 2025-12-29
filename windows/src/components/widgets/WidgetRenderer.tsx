@@ -1,5 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useServerClockStrict } from "../../utils/useServerClockStrict"; // عدّل المسار حسب مشروعك
 
+function pad2(n: number) {
+  return String(Math.floor(Math.abs(n))).padStart(2, "0");
+}
+
+function secsToHMS(secs: number) {
+  const s = ((secs % 86400) + 86400) % 86400; // clamp day
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = Math.floor(s % 60);
+  return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
+}
+
+function to12H(time24: string) {
+  // time24: "HH:mm:ss"
+  const [H, m, s] = time24.split(":");
+  let h = parseInt(H, 10) || 0;
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${pad2(h)}:${m}:${s} ${ampm}`;
+}
 /* ──────────────────────────────────────────────────────────────
   Types
 ────────────────────────────────────────────────────────────── */
@@ -56,8 +78,6 @@ const widthClass = (size?: WidgetConf["size"]) => {
       return "w-[min(82vw,480px)]";
   }
 };
-
-
 
 const ringFromAccent: Record<NonNullable<WidgetConf["accent"]>, string> = {
   slate: "ring-white/10",
@@ -260,32 +280,38 @@ export function WidgetRenderer({ widget }: { widget?: WidgetConf | null }) {
   CLOCK — dark glass, huge responsive digits
 ────────────────────────────────────────────────────────────── */
 function ClockWidget({ widget }: { widget: WidgetConf }) {
-  const [now, setNow] = useState(new Date());
+  const serverClock = useServerClockStrict();
+
+  // rerender tick (حتى الوقت يتحرك)
+  const [, tick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
+    const id = setInterval(() => tick((x) => x + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const time = now.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: widget.hourCycle === 12,
-  });
-  const date = now.toLocaleDateString(undefined, {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
+  const time = useMemo(() => {
+    if (!serverClock.isReady()) {
+      return "—:—:—";
+    }
+    const t24 = secsToHMS(serverClock.nowSecs());
+    return widget.hourCycle === 12 ? to12H(t24) : t24;
+  }, [serverClock, widget.hourCycle, tick]); // tick لحتى يتحدث كل ثانية
+
+  // ملاحظة: التاريخ هون local (إذا بدك تاريخ السيرفر لازم endpoint يعطي epoch وتبنيه)
+  const date = useMemo(() => {
+    const now = new Date();
+    return now.toLocaleDateString(undefined, {
+      weekday: "long",
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    });
+  }, [tick]);
+
   const city = widget.city?.toUpperCase();
 
   return (
-    <div
-      className={`absolute ${posClass(widget.position)} ${widthClass(
-        widget.size
-      )}`}
-    >
+    <div className={`absolute ${posClass(widget.position)} ${widthClass(widget.size)}`}>
       <div
         className={[
           "relative mx-auto rounded-3xl",
@@ -293,7 +319,7 @@ function ClockWidget({ widget }: { widget: WidgetConf }) {
           "shadow-2xl shadow-black/40",
           "ring-1",
           ringFromAccent[widget.accent ?? "slate"],
-"px-4 sm:px-6 lg:px-8 py-4 sm:py-5 lg:py-6",
+          "px-4 sm:px-6 lg:px-8 py-4 sm:py-5 lg:py-6",
           "text-white text-center",
         ].join(" ")}
       >
@@ -305,24 +331,36 @@ function ClockWidget({ widget }: { widget: WidgetConf }) {
               "radial-gradient(70% 60% at 20% 50%, rgba(59,130,246,0.12), transparent 60%), radial-gradient(70% 60% at 80% 50%, rgba(244,63,94,0.14), transparent 60%)",
           }}
         />
+
         <div
           className={[
             "font-extrabold select-none tracking-tight",
-"text-[clamp(38px,8.5vw,180px)] leading-none",
+            "text-[clamp(38px,8.5vw,180px)] leading-none",
             "drop-shadow-[0_6px_18px_rgba(0,0,0,0.25)]",
           ].join(" ")}
           style={{ fontVariantNumeric: "tabular-nums" }}
         >
           {time}
         </div>
-<div className="mt-2 text-[clamp(12px,2vw,18px)] opacity-90">
+
+        <div className="mt-2 text-[clamp(12px,2vw,18px)] opacity-90">
           {date}
         </div>
+
         {city ? (
           <div className="mt-4 font-semibold text-[clamp(13px,2.2vw,22px)] opacity-90 truncate">
             {city}
           </div>
         ) : null}
+
+        {/* Debug صغير اختياري */}
+        <div className="mt-3 text-[11px] opacity-60">
+          {serverClock.isReady()
+            ? `server (${serverClock.timezone() ?? "tz?"}) · rtt ${Math.round(
+                serverClock.lastRttMs()
+              )}ms · drift ${serverClock.driftSec().toFixed(2)}s`
+            : "waiting for server time…"}
+        </div>
       </div>
     </div>
   );
