@@ -46,7 +46,10 @@ export function useActiveSchedule(screenId?: string) {
   const clock = useServerClockStrict();
 
   const date = parent.data?.date;
-  const items: ParentScheduleItem[] = parent.data?.data ?? [];
+  const items: ParentScheduleItem[] = useMemo(
+    () => parent.data?.data ?? [],
+    [parent.data?.data]
+  );
 
   // snapshot من ساعة السيرفر
   const nowSec = clock.nowSecs();

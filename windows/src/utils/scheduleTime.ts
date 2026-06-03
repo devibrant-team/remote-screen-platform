@@ -1,7 +1,7 @@
 // src/utils/scheduleTime.ts
 import type { ParentScheduleItem } from "../types/schedule";
 
-/* HH:mm:ss → seconds of day */
+/* HH:mm:ss -> seconds of day */
 export function toSecs(hms?: string | null) {
   if (!hms) return 0;
   const [h = "0", m = "0", s = "0"] = String(hms).split(":");
@@ -15,7 +15,13 @@ function cmpDate(a: string, b: string) {
   return 0;
 }
 
-/** هل هذا الـ schedule فعّال الآن (date + time) */
+function addDays(date: string, days: number) {
+  const d = new Date(date + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Is this schedule active at the given server date + server seconds-of-day? */
 export function isScheduleActiveAtDateTime(
   item: ParentScheduleItem,
   today: string,
@@ -23,27 +29,28 @@ export function isScheduleActiveAtDateTime(
 ): boolean {
   const sd = item.start_date ?? item.start_day;
   const ed = item.end_date ?? sd;
-
   if (!sd || !ed) return false;
-
-  // خارج نطاق التاريخ
-  if (cmpDate(today, sd) < 0) return false;
-  if (cmpDate(today, ed) > 0) return false;
 
   const startSec = toSecs(item.start_time);
   const endSec = toSecs(item.end_time);
+  const crossesMidnight = endSec <= startSec;
 
-  // يوم البداية: لازم تكون بعد start_time
+  if (crossesMidnight && sd === ed) {
+    if (today === sd) return nowSec >= startSec;
+    if (today === addDays(sd, 1)) return nowSec < endSec;
+    return false;
+  }
+
+  if (cmpDate(today, sd) < 0) return false;
+  if (cmpDate(today, ed) > 0) return false;
+
   if (today === sd && nowSec < startSec) return false;
-
-  // يوم النهاية: لازم تكون قبل end_time (end exclusive)
   if (today === ed && nowSec >= endSec) return false;
 
-  // الأيام اللي بالنص (بين start_date و end_date) = فعّال طول اليوم
   return true;
 }
 
-/** resolve active + next باستخدام date + time */
+/** resolve active + next using server date + time */
 export function resolveActiveAndNext(
   items: ParentScheduleItem[],
   today: string,
@@ -61,7 +68,6 @@ export function resolveActiveAndNext(
     const sd = it.start_date ?? it.start_day;
     if (!sd) continue;
 
-    // schedule بالمستقبل (تاريخ أكبر أو نفس اليوم وبداية أكبر من الآن)
     const isFuture =
       cmpDate(sd, today) > 0 ||
       (sd === today && toSecs(it.start_time) > nowSec);
@@ -73,7 +79,6 @@ export function resolveActiveAndNext(
       continue;
     }
 
-    // اختر الأقرب: date أصغر، ولو متساويين time أصغر
     const nDate = next.start_date ?? next.start_day!;
     const better =
       cmpDate(sd, nDate) < 0 ||

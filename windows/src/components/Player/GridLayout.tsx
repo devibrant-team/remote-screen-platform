@@ -98,10 +98,12 @@ function mapCellToSlotIndex(i: number, cols: number, rows: number) {
 export default function GridLayout({
   slide,
   onVideoRef,
+  onMediaFailure,
   gap = 0,
 }: {
   slide: PlaylistSlide;
   onVideoRef: (el: HTMLVideoElement | null) => void;
+  onMediaFailure?: (slot: PlaylistSlot, reason: string) => void;
   gap?: number;
 }) {
   // ✅ IMPORTANT: backend sends grid_id, not grid_style
@@ -150,7 +152,11 @@ export default function GridLayout({
             >
               {slot ? (
                 <>
-                  <SlotMedia slot={slot} onVideoRef={onVideoRef} />
+                  <SlotMedia
+                    slot={slot}
+                    onVideoRef={onVideoRef}
+                    onRepeatedFailure={onMediaFailure}
+                  />
                   <WidgetRenderer widget={(slot as any).widget as any} />
                 </>
               ) : (

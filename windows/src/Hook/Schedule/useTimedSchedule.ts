@@ -1,5 +1,5 @@
 // src/features/schedule/hooks/useTimedSchedule.ts
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useParentSchedules,
   pickScheduleId,
@@ -14,7 +14,10 @@ export function useTimedSchedule(screenId?: string) {
 
   // day = server date (YYYY-MM-DD)
   const day = parent.data?.date;
-  const items: ParentScheduleItem[] = parent.data?.data ?? [];
+  const items: ParentScheduleItem[] = useMemo(
+    () => parent.data?.data ?? [],
+    [parent.data?.data]
+  );
 
   const [activeScheduleId, setActiveScheduleId] = useState<number | undefined>(
     undefined

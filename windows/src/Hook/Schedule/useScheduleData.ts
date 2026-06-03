@@ -39,8 +39,10 @@ export function useTimedScheduleData() {
   // ⏭️ Prefetch child للـ next schedule بناءً على ساعة السيرفر (HH:mm:ss)
   useEffect(() => {
     if (!next) return;
+    const scheduleId = next.scheduleId;
+    const startTime = next.start_time;
 
-    const rawMs = msUntilSmart(clock, next.start_time);
+    const rawMs = msUntilSmart(clock, startTime);
     if (rawMs == null) return;
 
     // نبلّش prefetch قبل 5 دقائق من بداية الـ child
@@ -48,7 +50,7 @@ export function useTimedScheduleData() {
 
     let timer: number | undefined;
     const arm = () => {
-      prefetchNextPlaylist(qc, next.scheduleId, screenId).catch(() => {});
+      prefetchNextPlaylist(qc, scheduleId, screenId).catch(() => {});
     };
 
     if (delay === 0) {
@@ -60,13 +62,14 @@ export function useTimedScheduleData() {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [next?.scheduleId, next?.start_time, screenId, qc, clock]);
+  }, [next, screenId, qc, clock]);
 
   // 🅾️ Prefetch للـ DEFAULT playlist قبل نهاية الـ window الحالية حسب ساعة السيرفر
   useEffect(() => {
     if (!active || !screenId) return;
 
-    const rawMs = msUntilSmart(clock, active.end_time);
+    const endTime = active.end_time;
+    const rawMs = msUntilSmart(clock, endTime);
     if (rawMs == null) return;
 
     const delay = Math.max(0, rawMs - PREFETCH_DEFAULT_BEFORE_END_MS);
@@ -89,7 +92,7 @@ export function useTimedScheduleData() {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [active?.scheduleId, active?.end_time, screenId, qc, clock]);
+  }, [active, screenId, qc, clock]);
 
   return {
     screenId,

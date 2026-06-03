@@ -61,6 +61,7 @@ export function useTimedScheduleData() {
     if (!next) return;
     if (!screenId) return;
 
+    const scheduleId = next.scheduleId;
     const startDate = next.start_date ?? next.start_day;
     const rawMs = msUntilDateTimeSmart(clock, today, startDate, next.start_time);
     if (rawMs == null) return;
@@ -69,7 +70,7 @@ export function useTimedScheduleData() {
 
     let timer: number | undefined;
     const arm = () => {
-      prefetchNextPlaylist(qc, next.scheduleId, screenId).catch(() => {});
+      prefetchNextPlaylist(qc, scheduleId, screenId).catch(() => {});
     };
 
     if (delay === 0) arm();
@@ -79,10 +80,7 @@ export function useTimedScheduleData() {
       if (timer) window.clearTimeout(timer);
     };
   }, [
-    next?.scheduleId,
-    next?.start_time,
-    next?.start_date,
-    next?.start_day,
+    next,
     screenId,
     qc,
     clock,
@@ -115,11 +113,7 @@ export function useTimedScheduleData() {
       if (timer) window.clearTimeout(timer);
     };
   }, [
-    active?.scheduleId,
-    active?.end_time,
-    active?.end_date,
-    active?.start_date,
-    active?.start_day,
+    active,
     screenId,
     qc,
     clock,

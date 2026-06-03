@@ -2,7 +2,7 @@
 import "swiper/css";
 import "swiper/css/effect-fade";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import SmartPlayer from "../components/Player/SmartPlayer";
 import { useScreenId } from "../Hook/Device/useScreenId";
@@ -114,23 +114,23 @@ const canWriteNowPlaying = () => {
     return () => window.clearInterval(id);
   }, []);
 
+  const bandwidthPlaylist =
+    (decision?.playlist as PlaylistT | null) ||
+    (upcomingPlaylist as PlaylistT | null) ||
+    null;
+  const decisionSource = (decision as any).source;
+
   // Probe bandwidth
   useEffect(() => {
-    const pl =
-      (decision?.playlist as PlaylistT | null) ||
-      (upcomingPlaylist as PlaylistT | null) ||
-      null;
-
     const sample =
-      pl?.slides
+      bandwidthPlaylist?.slides
         ?.flatMap((s: any) => s?.slots || [])
         ?.find(
           (slot: any) => String(slot?.mediaType || "").toLowerCase() === "video"
         )?.ImageFile || null;
 
     if (sample) probeBandwidth(sample).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hashPlaylist((decision?.playlist as any) || null)]);
+  }, [bandwidthPlaylist]);
 
   const latest = useRef<{
     screenId?: string | number;
@@ -208,13 +208,13 @@ const canWriteNowPlaying = () => {
       hasSlides(decision.playlist as any) &&
       hashPlaylist(decision.playlist as any) === hashPlaylist(current as any);
     const source: "child" | "default" =
-      sameAsDecision && (decision as any).source === "child"
+      sameAsDecision && decisionSource === "child"
         ? "child"
         : "default";
     setNowPlaying(source, current);
-  }, [current, decision.playlist, (decision as any).source]);
+  }, [current, decision.playlist, decisionSource]);
 
-  const quietRefresh = async (overrideScheduleId?: number | string | null) => {
+  const quietRefresh = useCallback(async (overrideScheduleId?: number | string | null) => {
     const sid = overrideScheduleId ?? latest.current.scheduleId ?? null;
 
     console.log("[Reverb] 🔄 quietRefresh (by event)", {
@@ -235,7 +235,7 @@ const canWriteNowPlaying = () => {
         err,
       });
     }
-  };
+  }, [quietRefreshAll, screenId]);
 
   useEffect(() => {
     if (!screenId) return;
@@ -273,8 +273,7 @@ const canWriteNowPlaying = () => {
         echo.leave(channelName);
       } catch {}
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenId, quietRefreshAll]);
+  }, [screenId, quietRefreshAll, quietRefresh]);
 
   useEffect(() => {
     const handler = (ev: Event) => {
@@ -282,7 +281,7 @@ const canWriteNowPlaying = () => {
 
       const detail = (ev as CustomEvent<PlaylistLoopHealthDetail>).detail;
       if (!detail) return;
-      if ((decision as any)?.source !== "child") return;
+      if (decisionSource !== "child") return;
 
       if (!detail.ok) {
         if (process.env.NODE_ENV !== "production") {
@@ -311,7 +310,7 @@ const canWriteNowPlaying = () => {
     return () => {
       window.removeEventListener("playlist:loop-health", handler as any);
     };
-  }, [current, (decision as any)?.source]);
+  }, [current, decisionSource]);
 
   useEffect(() => {
     if (typeof activeEndDelayMs !== "number") return;
@@ -341,7 +340,7 @@ const canWriteNowPlaying = () => {
         console.log("[Reverb] resume refresh error", e);
       }
     })();
-  }, [isOnline, netMode, activeScheduleId]);
+  }, [isOnline, netMode, activeScheduleId, quietRefresh]);
 
   const [enableUpcomingWarm, setEnableUpcomingWarm] = useState(false);
 
@@ -402,6 +401,7 @@ const canWriteNowPlaying = () => {
             screenId={screenId}
             scheduleId={activeScheduleId}
             childStartTime={childStartTime}
+            serverDate={parent.data?.date ?? null}
             activeSchedule={active as any}
             onRequestRefetch={() => void quietRefresh(null)}
           />
@@ -421,6 +421,7 @@ const canWriteNowPlaying = () => {
             screenId={screenId}
             scheduleId={activeScheduleId}
             childStartTime={childStartTime}
+            serverDate={parent.data?.date ?? null}
             activeSchedule={active as any}
             onRequestRefetch={() => void quietRefresh(null)}
           />

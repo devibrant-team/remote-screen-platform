@@ -1,5 +1,5 @@
 // src/features/schedule/hooks/useResolvedPlaylist.ts
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useChildPlaylist,
@@ -84,7 +84,7 @@ export function useResolvedPlaylist(screenId?: string) {
   const parent = useParentSchedules(screenId);
 
   const day = parent.data?.date;
-  const items = parent.data?.data ?? [];
+  const items = useMemo(() => parent.data?.data ?? [], [parent.data?.data]);
 
   // ⏱️ tick محلي سريع (كل 100ms) لنعيد حساب الـ active حسب ساعة السيرفر
   const [timeTick, setTimeTick] = useState(0);
@@ -97,6 +97,7 @@ export function useResolvedPlaylist(screenId?: string) {
 
   // active/next حسب (date + time) من السيرفر
   const { active, next } = useMemo(() => {
+    void timeTick;
     if (!day || items.length === 0) {
       return { active: undefined, next: null };
     }
@@ -140,8 +141,9 @@ export function useResolvedPlaylist(screenId?: string) {
 
   /* ── Persist آخر نسخة ناجحة للـ Default ─────────────── */
   useEffect(() => {
-    if (hasSlides(defaultQ.data?.playlist)) {
-      saveLastGoodDefault(defaultQ.data!.playlist);
+    const playlist = defaultQ.data?.playlist;
+    if (hasSlides(playlist)) {
+      saveLastGoodDefault(playlist);
     }
   }, [defaultQ.data?.playlist]);
 
@@ -319,9 +321,6 @@ export function useResolvedPlaylist(screenId?: string) {
     active,
     child.data?.playlist,
     defaultQ.data?.playlist,
-    parent.isLoading,
-    child.isError,
-    defaultQ.isError,
   ]);
 
   // Prefetch window من الشرائح للميديا (صور/فيديو) حسب الـ decision
@@ -333,7 +332,7 @@ export function useResolvedPlaylist(screenId?: string) {
 
   const activeScheduleIdFinal = activeScheduleId;
 
-  const quietRefreshAll = async (overrideScheduleId?: number | string | null) => {
+  const quietRefreshAll = useCallback(async (overrideScheduleId?: number | string | null) => {
     const sid = overrideScheduleId ?? activeScheduleIdFinal ?? undefined;
     const parentKey = qk.parent(screenId);
     const childKey = sid != null ? qk.child(sid, screenId) : null;
@@ -348,7 +347,7 @@ export function useResolvedPlaylist(screenId?: string) {
     if (childKey)
       await qc.refetchQueries({ queryKey: childKey, type: "active" });
     await qc.refetchQueries({ queryKey: defaultKey, type: "active" });
-  };
+  }, [activeScheduleIdFinal, qc, screenId]);
 
   const anyLoading = parent.isLoading || child.isLoading || defaultQ.isLoading;
   const isLoadingSafe = anyLoading && !hasSlides(decision.playlist);

@@ -86,6 +86,16 @@ export function usePlaylistHealth(opts: Options) {
     videoCleanupMap.current.set(videoEl, cleanup);
   };
 
+  const unregisterVideoGuard = (videoEl: HTMLVideoElement) => {
+    const cleanup = videoCleanupMap.current.get(videoEl);
+    if (cleanup) {
+      try {
+        cleanup();
+      } catch {}
+    }
+    videoCleanupMap.current.delete(videoEl);
+  };
+
   const notifyLoopEnd = () => {
     loopIndexRef.current += 1;
     const hadGlitch = hasGlitchInLoop.current;
@@ -119,15 +129,21 @@ export function usePlaylistHealth(opts: Options) {
 
   // تنظيف كل الفيديوهات عند unmount
   useEffect(() => {
+    const cleanupMap = videoCleanupMap.current;
     return () => {
-      videoCleanupMap.current.forEach((fn) => {
+      cleanupMap.forEach((fn) => {
         try {
           fn();
         } catch {}
       });
-      videoCleanupMap.current.clear();
+      cleanupMap.clear();
     };
   }, []);
 
-  return { reportGlitch, notifyLoopEnd, registerVideoGuard };
+  return {
+    reportGlitch,
+    notifyLoopEnd,
+    registerVideoGuard,
+    unregisterVideoGuard,
+  };
 }

@@ -19,9 +19,17 @@ export type SlideLogicState = {
   msUntilNextSlide: number | null;
 };
 
+function daysBetween(a: string, b: string) {
+  const A = new Date(a + "T00:00:00Z").getTime();
+  const B = new Date(b + "T00:00:00Z").getTime();
+  return Math.round((B - A) / 86400000);
+}
+
 export function useSlideLogic(
   slides: SlideLike[],
-  childStartTime?: string | null
+  childStartTime?: string | null,
+  scheduleStartDate?: string | null,
+  serverDate?: string | null
 ): SlideLogicState {
   const clock = useServerClockStrict();
 
@@ -83,7 +91,11 @@ export function useSlideLogic(
 
     // ❗ هون بنستخدم فقط وقت السيرفر (clock.nowSecs) اللي انت حاميّه أصلاً
     const now = clock.nowSecs();
-    let elapsed = now - baseStartSec;
+    const dayOffset =
+      childStartTime && scheduleStartDate && serverDate
+        ? daysBetween(scheduleStartDate, serverDate) * 86400
+        : 0;
+    let elapsed = dayOffset + now - baseStartSec;
     if (elapsed < 0) elapsed = 0;
 
     const loopElapsed = totalDuration > 0 ? elapsed % totalDuration : 0;
@@ -118,7 +130,16 @@ export function useSlideLogic(
       offsetInSlide: 0,
       msUntilNextSlide: null,
     };
-  }, [slides, totalDuration, baseStartSec, clock, tick]);
+  }, [
+    slides,
+    totalDuration,
+    baseStartSec,
+    clock,
+    tick,
+    childStartTime,
+    scheduleStartDate,
+    serverDate,
+  ]);
 
   return state;
 }

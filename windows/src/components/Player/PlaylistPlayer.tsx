@@ -1,5 +1,5 @@
 // src/features/schedule/components/PlaylistPlayer.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChildPlaylistResponse,
   PlaylistSlide,
@@ -35,6 +35,7 @@ type Props = {
   onRequestRefetch?: () => void;
   /** بداية child schedule من السيرفر "HH:mm:ss" (لو موجودة نفعّل sync المنطقي) */
   childStartTime?: string | null;
+  serverDate?: string | null;
   activeSchedule?: ParentScheduleItem;
 };
 
@@ -120,6 +121,7 @@ export default function PlaylistPlayer({
   scheduleId,
   onRequestRefetch,
   childStartTime,
+  serverDate,
   activeSchedule,
 }: Props) {
   const qc = useQueryClient();
@@ -145,7 +147,14 @@ export default function PlaylistPlayer({
     | "default";
 
   // 🔁 منطق السيرفر/الـtimeline: أي slide لازم تكون الآن؟ وكم مرق عليها؟ وكم باقي؟
-  const slideLogic = useSlideLogic(slides as any, childStartTime);
+  const scheduleStartDate =
+    activeSchedule?.start_date ?? activeSchedule?.start_day ?? null;
+  const slideLogic = useSlideLogic(
+    slides as any,
+    childStartTime,
+    scheduleStartDate,
+    serverDate ?? null
+  );
 
   // 🔁 Timeline كامل للـ schedule + playlist (loopات)
   const scheduleTimeline = useSchedulePlaylistTimeline({
@@ -170,6 +179,36 @@ export default function PlaylistPlayer({
   const prevIndexRef = useRef<number>(initialIndex);
 
   const videoRefs = useRef<Record<number, HTMLVideoElement[]>>({});
+  const unregisterVideoGuardRef = useRef(health.unregisterVideoGuard);
+
+  useEffect(() => {
+    unregisterVideoGuardRef.current = health.unregisterVideoGuard;
+  }, [health.unregisterVideoGuard]);
+
+  const pruneVideoRefs = useCallback((slideId?: number) => {
+    const pruneList = (key: string) => {
+      const id = Number(key);
+      const live: HTMLVideoElement[] = [];
+      (videoRefs.current[id] || []).forEach((v) => {
+        if (v.isConnected) live.push(v);
+        else unregisterVideoGuardRef.current(v);
+      });
+      if (live.length) videoRefs.current[id] = live;
+      else delete videoRefs.current[id];
+    };
+
+    if (slideId != null) pruneList(String(slideId));
+    else Object.keys(videoRefs.current).forEach(pruneList);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      Object.values(videoRefs.current).forEach((list) => {
+        list.forEach((v) => unregisterVideoGuardRef.current(v));
+      });
+      videoRefs.current = {};
+    };
+  }, []);
 
   const [showOverlay, setShowOverlay] = useState(false);
 
@@ -252,6 +291,7 @@ export default function PlaylistPlayer({
       return;
     }
 
+    pruneVideoRefs(slide.id);
     const vids = videoRefs.current[slide.id] || [];
 
     vids.forEach((v) => {
@@ -282,7 +322,7 @@ export default function PlaylistPlayer({
     });
 
     lastSeekPerSlide.current[slideKey] = clamped;
-  }, [slideLogic.enabled, slideLogic.offsetInSlide, activeIndex, slides]);
+  }, [slideLogic.enabled, slideLogic.offsetInSlide, activeIndex, slides, pruneVideoRefs]);
 
   // external "skip once" event
   useEffect(() => {
@@ -335,6 +375,7 @@ export default function PlaylistPlayer({
     prevIndexRef.current = activeIndex;
 
     // أوقف بقية الفيديوهات
+    pruneVideoRefs();
     Object.entries(videoRefs.current).forEach(([sid, list]) => {
       if (Number(sid) !== slide.id) list.forEach((v) => v.pause());
     });
@@ -356,10 +397,11 @@ export default function PlaylistPlayer({
     });
 
     // 🔔 مافي setTimeout هنا أبداً – الانتقال للـ slide اللي بعدها
-  }, [activeIndex, slides, health]);
+  }, [activeIndex, slides, health, pruneVideoRefs]);
 
   // تسجيل الفيديوهات فور دخولها DOM
   const registerVideo = (slideId: number, el: HTMLVideoElement | null) => {
+    pruneVideoRefs(slideId);
     if (!el) return;
     el.preload = "auto";
     el.playsInline = true;
@@ -389,11 +431,18 @@ export default function PlaylistPlayer({
       const channel = echo.channel(channelName);
 
       const handleGoto = (e: any) => {
+        if (slideLogic.enabled) return;
         const idx = Number(e?.index ?? e?.slide);
         if (Number.isFinite(idx)) slideTo(idx);
       };
-      const handleNext = () => next();
-      const handlePrev = () => slideTo(activeIndex - 1);
+      const handleNext = () => {
+        if (slideLogic.enabled) return;
+        next();
+      };
+      const handlePrev = () => {
+        if (slideLogic.enabled) return;
+        slideTo(activeIndex - 1);
+      };
 
       const handleReload = (e: any) => {
         persistAuthTokenFromEvent(e);
@@ -454,7 +503,14 @@ export default function PlaylistPlayer({
       unsubs.forEach((u) => u && u());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenId, resolvedScheduleId, activeIndex, onRequestRefetch, qc]);
+  }, [
+    screenId,
+    resolvedScheduleId,
+    activeIndex,
+    onRequestRefetch,
+    qc,
+    slideLogic.enabled,
+  ]);
 
   if (!slides.length) return null;
 
@@ -499,6 +555,7 @@ export default function PlaylistPlayer({
           setShowOverlay(true);
 
           const targetSlide = slides[target];
+          pruneVideoRefs(targetSlide?.id);
           const vidsTarget = videoRefs.current[targetSlide?.id || 0] || [];
           vidsTarget.forEach((v) => {
             try {
@@ -516,6 +573,7 @@ export default function PlaylistPlayer({
             await new Promise((r) => setTimeout(r, 120));
           }
 
+          pruneVideoRefs();
           Object.entries(videoRefs.current).forEach(([sid, list]) => {
             if (Number(sid) !== targetSlide?.id)
               list.forEach((v) => {
@@ -541,6 +599,9 @@ export default function PlaylistPlayer({
               <GridLayout
                 slide={s}
                 onVideoRef={(el) => registerVideo(s.id, el)}
+                onMediaFailure={(_slot, reason) =>
+                  health.reportGlitch(s.id, reason)
+                }
                 gap={0}
               />
             </div>

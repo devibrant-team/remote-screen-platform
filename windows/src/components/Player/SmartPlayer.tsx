@@ -1,13 +1,14 @@
 // src/features/schedule/components/SmartPlayer.tsx
 import React from "react";
-import type { ChildPlaylistResponse, ParentScheduleItem } from "../../types/schedule";
+import type {
+  ChildPlaylistResponse,
+  ParentScheduleItem,
+} from "../../types/schedule";
 import PlaylistPlayer from "./PlaylistPlayer";
 
-// 👇 Interactive support (web like mobile)
 import InteractivePlayer from "./InteractivePlayer";
 import type { InteractivePlaylistDTO } from "../../types/interactive";
 
-// (اختياري) Warmup للـ normal playlists
 import HeadlessWarmup from "./HeadlessWarmup";
 
 type NormalPlaylistT = ChildPlaylistResponse["playlist"];
@@ -20,11 +21,10 @@ type Props = {
   scheduleId?: string | number;
   onRequestRefetch?: () => void;
   childStartTime?: string | null;
-  /** NEW: الـ parent schedule الكامل (start_time + end_time) */
+  serverDate?: string | null;
   activeSchedule?: ParentScheduleItem;
 };
 
-// Detect interactive playlists by style: Interactive1/Interactive2/...
 function isInteractivePlaylist(p: AnyPlaylistT): p is InteractivePlaylistDTO {
   const style = (p as any)?.style;
   if (!style) return false;
@@ -39,9 +39,9 @@ const SmartPlayer: React.FC<Props> = ({
   scheduleId,
   onRequestRefetch,
   childStartTime,
+  serverDate,
   activeSchedule,
 }) => {
-  // ✅ Interactive playlists
   if (isInteractivePlaylist(playlist)) {
     return (
       <InteractivePlayer
@@ -54,12 +54,10 @@ const SmartPlayer: React.FC<Props> = ({
     );
   }
 
-  // ✅ Normal playlists
   const normal = playlist as NormalPlaylistT;
 
   return (
     <>
-      {/* Optional: warmup videos/media for smoother playback */}
       <HeadlessWarmup
         playlist={normal as any}
         aggressive={true}
@@ -73,6 +71,7 @@ const SmartPlayer: React.FC<Props> = ({
         scheduleId={scheduleId}
         onRequestRefetch={onRequestRefetch}
         childStartTime={childStartTime}
+        serverDate={serverDate}
         activeSchedule={activeSchedule}
       />
     </>

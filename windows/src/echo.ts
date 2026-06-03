@@ -44,36 +44,55 @@ function setState(next: ConnState) {
 const pusher = (echo.connector as any).pusher;
 
 // All state changes (previous/current)
+const handleStateChange = ({
+  current,
+}: {
+  previous: ConnState;
+  current: ConnState;
+}) => {
+  setState(current);
+};
+
 pusher.connection.bind(
   "state_change",
-  ({ current }: { previous: ConnState; current: ConnState }) => {
-    setState(current);
-  }
+  handleStateChange
 );
 
 // Specific events you might want to log
-pusher?.connection.bind("connected", () =>
-  console.log("[Reverb] ✅ Connected")
-);
-pusher?.connection.bind("connecting", () =>
-  console.log("[Reverb] ⏳ Connecting...")
-);
-pusher?.connection.bind("disconnected", () =>
-  console.log("[Reverb] ❌ Disconnected")
-);
-pusher?.connection.bind("unavailable", () =>
-  console.log("[Reverb] ⚠ Unavailable")
-);
-pusher?.connection.bind("failed", () => console.log("[Reverb] 💥 Failed"));
-pusher?.connection.bind("error", (err: unknown) =>
-  console.error("[Reverb] 🚨 Error", err)
-);
-
-// Optional error hook
-pusher.connection.bind("error", (err: unknown) => {
+const handleConnected = () => console.log("[Reverb] ✅ Connected");
+const handleConnecting = () => console.log("[Reverb] ⏳ Connecting...");
+const handleDisconnected = () => console.log("[Reverb] ❌ Disconnected");
+const handleUnavailable = () => console.log("[Reverb] ⚠ Unavailable");
+const handleFailed = () => console.log("[Reverb] 💥 Failed");
+const handleConnectionErrorLog = (err: unknown) =>
+  console.error("[Reverb] 🚨 Error", err);
+const handleConnectionErrorWarn = (err: unknown) => {
   // eslint-disable-next-line no-console
   console.warn("Reverb connection error", err);
-});
+};
+
+pusher?.connection.bind("connected", handleConnected);
+pusher?.connection.bind("connecting", handleConnecting);
+pusher?.connection.bind("disconnected", handleDisconnected);
+pusher?.connection.bind("unavailable", handleUnavailable);
+pusher?.connection.bind("failed", handleFailed);
+pusher?.connection.bind("error", handleConnectionErrorLog);
+
+// Optional error hook
+pusher.connection.bind("error", handleConnectionErrorWarn);
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    pusher?.connection.unbind("state_change", handleStateChange);
+    pusher?.connection.unbind("connected", handleConnected);
+    pusher?.connection.unbind("connecting", handleConnecting);
+    pusher?.connection.unbind("disconnected", handleDisconnected);
+    pusher?.connection.unbind("unavailable", handleUnavailable);
+    pusher?.connection.unbind("failed", handleFailed);
+    pusher?.connection.unbind("error", handleConnectionErrorLog);
+    pusher?.connection.unbind("error", handleConnectionErrorWarn);
+  });
+}
 
 export const ReverbConnection = {
   /** current status string */
@@ -156,7 +175,7 @@ export function subscribeScreenChannel(
     onScheduleUpdate(e);
   };
 
-  const channel = echo.channel(channelName);
+  let channel = echo.channel(channelName);
   channel.listen(".ScheduleUpdate", handler);
 
   // إعادة الاشتراك عند عودة الاتصال
@@ -165,9 +184,10 @@ export function subscribeScreenChannel(
       console.log(`[Reverb] 🔄 Reconnected — resubscribing to ${channelName}`);
       console.log(`[Reverb] 📺 Screen ID (reconnect): ${idStr}`);
       try {
+        channel.stopListening(".ScheduleUpdate", handler);
         echo.leave(channelName);
-        const c = echo.channel(channelName);
-        c.listen(".ScheduleUpdate", handler);
+        channel = echo.channel(channelName);
+        channel.listen(".ScheduleUpdate", handler);
         console.log(`[Reverb] ✅ Resubscribed to ${channelName}`);
       } catch (err) {
         console.warn(`[Reverb] ⚠️ Failed to resubscribe to ${channelName}`, err);
@@ -220,6 +240,7 @@ export function subscribeScreenDeletedChannel(
         `[Reverb] 🔄 Reconnected — resubscribing ScreenDeleted on ${channelName}`
       );
       try {
+        channel.stopListening(".ScreenDeleted", handler);
         echo.leave(channelName);
         channel = echo.channel(channelName);
         channel.listen(".ScreenDeleted", handler);
@@ -284,16 +305,27 @@ export function subscribeScreenTypeChannel(
   };
 
   let channel: any = echo.channel(channelName);
+  const onSubscriptionSucceeded = () => {
+    console.log(`[Reverb] subscription_succeeded ${channelName}`);
+  };
+  const onSubscriptionError = (err: any) => {
+    console.log(`[Reverb] subscription_error ${channelName}`, err);
+  };
+  const bindDiagnostics = () => {
+    try {
+      channel.bind?.("pusher:subscription_succeeded", onSubscriptionSucceeded);
+      channel.bind?.("pusher:subscription_error", onSubscriptionError);
+    } catch {}
+  };
+  const unbindDiagnostics = () => {
+    try {
+      channel.unbind?.("pusher:subscription_succeeded", onSubscriptionSucceeded);
+      channel.unbind?.("pusher:subscription_error", onSubscriptionError);
+    } catch {}
+  };
 
-  // ✅ subscription diagnostics
-  try {
-    channel.bind?.("pusher:subscription_succeeded", () => {
-      console.log(`[Reverb] ✅ subscription_succeeded ${channelName}`);
-    });
-    channel.bind?.("pusher:subscription_error", (err: any) => {
-      console.log(`[Reverb] ❌ subscription_error ${channelName}`, err);
-    });
-  } catch {}
+  // subscription diagnostics
+  bindDiagnostics();
 
   // ✅ listen to multiple names temporarily (until you confirm broadcastAs)
   channel.listen(".ScreenType", handler);
@@ -306,19 +338,16 @@ export function subscribeScreenTypeChannel(
         `[Reverb] 🔄 Reconnected — resubscribing ScreenType on ${channelName}`
       );
       try {
+        channel.stopListening(".ScreenType", handler);
+        channel.stopListening("ScreenType", handler);
+        channel.stopListening("ScreenTypeChanged", handler);
+        unbindDiagnostics();
         echo.leave(channelName);
 
         channel = echo.channel(channelName);
 
         // re-bind diagnostics
-        try {
-          channel.bind?.("pusher:subscription_succeeded", () => {
-            console.log(`[Reverb] ✅ subscription_succeeded (re) ${channelName}`);
-          });
-          channel.bind?.("pusher:subscription_error", (err: any) => {
-            console.log(`[Reverb] ❌ subscription_error (re) ${channelName}`, err);
-          });
-        } catch {}
+        bindDiagnostics();
 
         channel.listen(".ScreenType", handler);
         channel.listen("ScreenType", handler);
@@ -340,6 +369,7 @@ export function subscribeScreenTypeChannel(
       channel.stopListening(".ScreenType", handler);
       channel.stopListening("ScreenType", handler);
       channel.stopListening("ScreenTypeChanged", handler);
+      unbindDiagnostics();
       echo.leave(channelName);
     } catch (err) {
       console.warn(
@@ -373,6 +403,24 @@ export function subscribeScreenRefreshChannel(
 
   let ch: any = null;
   let cancelled = false;
+  const onSubscriptionSucceeded = () => {
+    console.log(`[Reverb] subscription_succeeded ${channelName}`);
+  };
+  const onSubscriptionError = (err: any) => {
+    console.log(`[Reverb] subscription_error ${channelName}`, err);
+  };
+  const bindDiagnostics = () => {
+    try {
+      ch?.bind?.("pusher:subscription_succeeded", onSubscriptionSucceeded);
+      ch?.bind?.("pusher:subscription_error", onSubscriptionError);
+    } catch {}
+  };
+  const unbindDiagnostics = () => {
+    try {
+      ch?.unbind?.("pusher:subscription_succeeded", onSubscriptionSucceeded);
+      ch?.unbind?.("pusher:subscription_error", onSubscriptionError);
+    } catch {}
+  };
 
   (async () => {
     try {
@@ -382,15 +430,8 @@ export function subscribeScreenRefreshChannel(
 
       ch = echo.channel(channelName);
 
-      // ✅ diagnostics
-      try {
-        ch.bind?.("pusher:subscription_succeeded", () => {
-          console.log(`[Reverb] ✅ subscription_succeeded ${channelName}`);
-        });
-        ch.bind?.("pusher:subscription_error", (err: any) => {
-          console.log(`[Reverb] ❌ subscription_error ${channelName}`, err);
-        });
-      } catch {}
+      // diagnostics
+      bindDiagnostics();
 
       // ✅ listen (keep both 1 day; then remove the extra)
       ch.listen(".ScreenRefresh", handler);
@@ -413,6 +454,7 @@ export function subscribeScreenRefreshChannel(
     try {
       ch?.stopListening?.(".ScreenRefresh", handler);
       ch?.stopListening?.("ScreenRefresh", handler);
+      unbindDiagnostics();
     } catch {}
     try {
       echo.leave(channelName);

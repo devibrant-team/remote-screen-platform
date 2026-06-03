@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import type { PlaylistSlide, ParentScheduleItem } from "../../types/schedule";
 import {
@@ -29,25 +29,31 @@ export function useSchedulePlaylistTimeline({
   const existing = useSelector((state: RootState) =>
     selectScheduleTimeline(state, scheduleId)
   );
+  const endTime = schedule?.end_time;
+  const slideKey = useMemo(
+    () => JSON.stringify(slides.map((s) => ({ id: s.id, d: s.duration }))),
+    [slides]
+  );
 
   useEffect(() => {
-    if (!scheduleId || !schedule || !slides.length || !childStartTime) return;
+    if (!scheduleId || !endTime || !slides.length || !childStartTime) return;
 
     const timeline = buildSchedulePlaylistTimeline(
       scheduleId,
       slides,
       childStartTime,
-      schedule.end_time
+      endTime
     );
 
     dispatch(setScheduleTimeline({ scheduleId, timeline }));
   }, [
     dispatch,
     scheduleId,
-    schedule?.end_time,
+    slides,
+    endTime,
     childStartTime,
     // لو تغيّرت durations أو ids نعيد البناء
-    JSON.stringify(slides.map((s) => ({ id: s.id, d: s.duration }))),
+    slideKey,
   ]);
 
   return existing;
