@@ -306,8 +306,8 @@ export default function CreateScreen() {
       localStorage.setItem(LS_LINKED, "1");
       window.dispatchEvent(new Event("iguana:linked"));
       setTimeout(() => {
-  window.location.reload();
-}, 20_000);
+        window.location.reload();
+      }, 20_000);
 
       setDeviceState((prev) => ({ ...prev, linked: true }));
       linkedRef.current = true;
@@ -366,12 +366,12 @@ export default function CreateScreen() {
   const flowText = isLinked
     ? "Device is linked"
     : hasId
-    ? "Awaiting linking (enter the pairing code in admin)"
-    : shouldRegister
-    ? isPending
-      ? "Registering…"
-      : "Preparing registration…"
-    : "Waiting…";
+      ? "Awaiting linking (enter the pairing code in admin)"
+      : shouldRegister
+        ? isPending
+          ? "Registering…"
+          : "Preparing registration…"
+        : "Waiting…";
 
   /* ──────────────────────────────────────────────────────────────
     UI (Light Theme — white bg, black text, red accents)
