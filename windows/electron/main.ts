@@ -9,9 +9,7 @@ import { pipeline } from "node:stream";
 import { promisify } from "node:util";
 const streamPipeline = promisify(pipeline);
 
-// ✅ Auto update
 import log from "electron-log";
-import { autoUpdater } from "electron-updater";
 
 const MEDIA_DIR = path.join(app.getPath("userData"), "media-cache");
 const INDEX_FILE = path.join(MEDIA_DIR, "index.json");
@@ -386,64 +384,7 @@ async function ensureCode() {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   ✅ Auto Update setup (electron-updater)
 ────────────────────────────────────────────────────────────── */
-
-function setupAutoUpdate() {
-  // logger
-  log.transports.file.level = "info";
-  autoUpdater.logger = log;
-
-  // settings
-  autoUpdater.autoDownload = true;
-
-  const send = (payload: any) => {
-    try {
-      win?.webContents.send("updater:event", payload);
-    } catch {}
-  };
-
-  autoUpdater.on("checking-for-update", () => send({ type: "checking" }));
-  autoUpdater.on("update-available", (info) =>
-    send({ type: "available", info })
-  );
-  autoUpdater.on("update-not-available", (info) => send({ type: "none", info }));
-  autoUpdater.on("download-progress", (p) =>
-    send({
-      type: "progress",
-      percent: p.percent,
-      transferred: p.transferred,
-      total: p.total,
-      bytesPerSecond: p.bytesPerSecond,
-    })
-  );
-  autoUpdater.on("update-downloaded", (info) =>
-    send({ type: "downloaded", info })
-  );
-  autoUpdater.on("error", (err) =>
-    send({ type: "error", message: err?.message || String(err) })
-  );
-
-  ipcMain.handle("updater:check", async () => {
-    if (!app.isPackaged) return { ok: false, reason: "not_packaged" };
-    try {
-      const r = await autoUpdater.checkForUpdates();
-      return { ok: true, info: r?.updateInfo };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e) };
-    }
-  });
-
-  ipcMain.handle("updater:install", async () => {
-    if (!app.isPackaged) return { ok: false, reason: "not_packaged" };
-    try {
-      autoUpdater.quitAndInstall(true, true);
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e) };
-    }
-  });
-}
 
 /* ──────────────────────────────────────────────────────────────
    ✅ Window
@@ -514,13 +455,6 @@ async function createWindow() {
   }
 
   // ✅ Start auto updater AFTER window is ready
-  if (!isDev) {
-    setupAutoUpdate();
-    setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(() => {});
-    }, 4000);
-  }
-
   win.on("closed", () => (win = null));
 }
 

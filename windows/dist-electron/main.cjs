@@ -45,9 +45,7 @@ const node_crypto_1 = require("node:crypto");
 const node_stream_1 = require("node:stream");
 const node_util_1 = require("node:util");
 const streamPipeline = (0, node_util_1.promisify)(node_stream_1.pipeline);
-// ✅ Auto update
 const electron_log_1 = __importDefault(require("electron-log"));
-const electron_updater_1 = require("electron-updater");
 const MEDIA_DIR = node_path_1.default.join(electron_1.app.getPath("userData"), "media-cache");
 const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, "index.json");
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
@@ -377,55 +375,7 @@ async function ensureCode() {
         store.set("code", sixDigitCode());
 }
 /* ──────────────────────────────────────────────────────────────
-   ✅ Auto Update setup (electron-updater)
 ────────────────────────────────────────────────────────────── */
-function setupAutoUpdate() {
-    // logger
-    electron_log_1.default.transports.file.level = "info";
-    electron_updater_1.autoUpdater.logger = electron_log_1.default;
-    // settings
-    electron_updater_1.autoUpdater.autoDownload = true;
-    const send = (payload) => {
-        try {
-            win?.webContents.send("updater:event", payload);
-        }
-        catch { }
-    };
-    electron_updater_1.autoUpdater.on("checking-for-update", () => send({ type: "checking" }));
-    electron_updater_1.autoUpdater.on("update-available", (info) => send({ type: "available", info }));
-    electron_updater_1.autoUpdater.on("update-not-available", (info) => send({ type: "none", info }));
-    electron_updater_1.autoUpdater.on("download-progress", (p) => send({
-        type: "progress",
-        percent: p.percent,
-        transferred: p.transferred,
-        total: p.total,
-        bytesPerSecond: p.bytesPerSecond,
-    }));
-    electron_updater_1.autoUpdater.on("update-downloaded", (info) => send({ type: "downloaded", info }));
-    electron_updater_1.autoUpdater.on("error", (err) => send({ type: "error", message: err?.message || String(err) }));
-    electron_1.ipcMain.handle("updater:check", async () => {
-        if (!electron_1.app.isPackaged)
-            return { ok: false, reason: "not_packaged" };
-        try {
-            const r = await electron_updater_1.autoUpdater.checkForUpdates();
-            return { ok: true, info: r?.updateInfo };
-        }
-        catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-        }
-    });
-    electron_1.ipcMain.handle("updater:install", async () => {
-        if (!electron_1.app.isPackaged)
-            return { ok: false, reason: "not_packaged" };
-        try {
-            electron_updater_1.autoUpdater.quitAndInstall(true, true);
-            return { ok: true };
-        }
-        catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-        }
-    });
-}
 /* ──────────────────────────────────────────────────────────────
    ✅ Window
    - NEW: Fullscreen on open
@@ -484,12 +434,6 @@ async function createWindow() {
         await win.loadFile(node_path_1.default.join(electron_1.app.getAppPath(), "dist", "index.html"));
     }
     // ✅ Start auto updater AFTER window is ready
-    if (!isDev) {
-        setupAutoUpdate();
-        setTimeout(() => {
-            electron_updater_1.autoUpdater.checkForUpdates().catch(() => { });
-        }, 4000);
-    }
     win.on("closed", () => (win = null));
 }
 electron_1.app.whenReady().then(async () => {

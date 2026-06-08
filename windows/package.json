@@ -32,7 +32,6 @@
     "@tanstack/react-query-devtools": "^5.85.3",
     "electron-log": "^5.4.3",
     "electron-store": "^10.1.0",
-    "electron-updater": "^6.6.2",
     "laravel-echo": "^2.2.0",
     "lucide-react": "^0.562.0",
     "pusher-js": "^8.4.0",
