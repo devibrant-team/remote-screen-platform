@@ -32,12 +32,32 @@ type ScheduleUpdatePayload = {
   scheduleId?: number | string;
   schedule_id?: number | string;
 } & Record<string, unknown>;
+type RefreshSource = "reverb" | "resume" | "manual" | "player";
 
 const hasSlides = (pl?: PlaylistT | null): pl is PlaylistT =>
   !!pl && Array.isArray(pl.slides) && pl.slides.length > 0;
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
+}
+
+function normalizeScheduleId(
+  payload: ScheduleUpdatePayload | null | undefined,
+  fallback?: string | number | null
+) {
+  return (
+    payload?.scheduleId ??
+    payload?.schedule_id ??
+    (payload as any)?.schedule?.id ??
+    (payload as any)?.data?.scheduleId ??
+    (payload as any)?.data?.schedule_id ??
+    (payload as any)?.data?.schedule?.id ??
+    (payload as any)?.payload?.scheduleId ??
+    (payload as any)?.payload?.schedule_id ??
+    (payload as any)?.payload?.schedule?.id ??
+    fallback ??
+    null
+  );
 }
 
 async function warmPlaylistLight(
@@ -214,10 +234,14 @@ const canWriteNowPlaying = () => {
     setNowPlaying(source, current);
   }, [current, decision.playlist, decisionSource]);
 
-  const quietRefresh = useCallback(async (overrideScheduleId?: number | string | null) => {
+  const quietRefresh = useCallback(async (
+    overrideScheduleId?: number | string | null,
+    source: RefreshSource = "manual"
+  ) => {
     const sid = overrideScheduleId ?? latest.current.scheduleId ?? null;
 
-    console.log("[Reverb] 🔄 quietRefresh (by event)", {
+    console.log("[Refresh] quietRefresh start", {
+      source,
       screenId,
       scheduleId: sid,
     });
@@ -244,12 +268,15 @@ const canWriteNowPlaying = () => {
     const channel = echo.channel(channelName);
 
     const handleEvent = (label: string) => (payload: ScheduleUpdatePayload) => {
-      const sid = (payload?.scheduleId ??
-        payload?.schedule_id ??
-        latest.current.scheduleId ??
-        null) as number | string | null;
+      console.log("[Reverb] raw payload", payload);
+
+      const sid = normalizeScheduleId(
+        payload,
+        latest.current.scheduleId ?? null
+      ) as number | string | null;
 
       console.log("[Reverb] 📩 Event", {
+        source: "reverb",
         label,
         channelName,
         screenId,
@@ -260,7 +287,7 @@ const canWriteNowPlaying = () => {
         persistAuthTokenFromEvent?.(payload);
       } catch {}
 
-      void quietRefresh(sid);
+      void quietRefresh(sid, "reverb");
     };
 
     channel.listen(".ScheduleUpdate", handleEvent("ScheduleUpdate"));
@@ -334,7 +361,7 @@ const canWriteNowPlaying = () => {
     if (!isOnline) return;
     (async () => {
       try {
-        await quietRefresh(null);
+        await quietRefresh(null, "resume");
         blockTargetUntil.current = 0;
       } catch (e) {
         console.log("[Reverb] resume refresh error", e);
@@ -403,7 +430,7 @@ const canWriteNowPlaying = () => {
             childStartTime={childStartTime}
             serverDate={parent.data?.date ?? null}
             activeSchedule={active as any}
-            onRequestRefetch={() => void quietRefresh(null)}
+            onRequestRefetch={() => void quietRefresh(null, "player")}
           />
         </div>
       )}
@@ -423,7 +450,7 @@ const canWriteNowPlaying = () => {
             childStartTime={childStartTime}
             serverDate={parent.data?.date ?? null}
             activeSchedule={active as any}
-            onRequestRefetch={() => void quietRefresh(null)}
+            onRequestRefetch={() => void quietRefresh(null, "player")}
           />
         </div>
       )}

@@ -40,6 +40,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
 const node_fs_1 = __importDefault(require("node:fs"));
+const node_http_1 = __importDefault(require("node:http"));
 const node_crypto_1 = require("node:crypto");
 const node_stream_1 = require("node:stream");
 const node_util_1 = require("node:util");
@@ -50,6 +51,134 @@ const electron_updater_1 = require("electron-updater");
 const MEDIA_DIR = node_path_1.default.join(electron_1.app.getPath("userData"), "media-cache");
 const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, "index.json");
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
+const MEDIA_PROXY_PORT = Number(process.env.MEDIA_PROXY_PORT || 17654);
+const MEDIA_PROXY_HOST = "127.0.0.1";
+const MEDIA_PROXY_ALLOWED_HOSTS = new Set([
+    "192.168.10.16",
+    process.env.VITE_REVERB_HOST,
+    process.env.MEDIA_SERVER_HOST,
+    process.env.SERVER_HOST,
+]
+    .filter(Boolean)
+    .map((host) => String(host).trim().toLowerCase()));
+const MEDIA_PROXY_EXPOSED_HEADERS = [
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+];
+let mediaProxyServer = null;
+function addMediaProxyCorsHeaders(res) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Range, Content-Type, Accept, Origin");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
+    res.setHeader("Accept-Ranges", "bytes");
+}
+function isPrivateLanHost(hostname) {
+    const host = hostname.toLowerCase();
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host))
+        return true;
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host))
+        return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host))
+        return true;
+    return MEDIA_PROXY_ALLOWED_HOSTS.has(host);
+}
+function parseAllowedMediaUrl(value) {
+    if (!value)
+        return null;
+    try {
+        const target = new URL(value);
+        if (target.protocol !== "http:" && target.protocol !== "https:")
+            return null;
+        if (!target.pathname.includes("/storage/"))
+            return null;
+        if (!isPrivateLanHost(target.hostname))
+            return null;
+        return target;
+    }
+    catch {
+        return null;
+    }
+}
+function copyMediaHeaders(remote, res) {
+    for (const headerName of MEDIA_PROXY_EXPOSED_HEADERS) {
+        const value = remote.headers.get(headerName);
+        if (value)
+            res.setHeader(headerName, value);
+    }
+    if (!remote.headers.get("accept-ranges")) {
+        res.setHeader("Accept-Ranges", "bytes");
+    }
+}
+function startMediaProxy() {
+    if (mediaProxyServer)
+        return;
+    mediaProxyServer = node_http_1.default.createServer(async (req, res) => {
+        addMediaProxyCorsHeaders(res);
+        if (!req.url) {
+            res.writeHead(400).end("Bad request");
+            return;
+        }
+        const requestUrl = new URL(req.url, `http://${MEDIA_PROXY_HOST}:${MEDIA_PROXY_PORT}`);
+        if (requestUrl.pathname !== "/media-proxy") {
+            res.writeHead(404).end("Not found");
+            return;
+        }
+        if (req.method === "OPTIONS") {
+            res.writeHead(204).end();
+            return;
+        }
+        if (req.method !== "GET" && req.method !== "HEAD") {
+            res.writeHead(405).end("Method not allowed");
+            return;
+        }
+        const targetUrl = parseAllowedMediaUrl(requestUrl.searchParams.get("url"));
+        if (!targetUrl) {
+            res.writeHead(400).end("Invalid media URL");
+            return;
+        }
+        const abort = new AbortController();
+        req.on("close", () => abort.abort());
+        try {
+            const headers = {};
+            const range = req.headers.range;
+            if (range)
+                headers.Range = String(range);
+            const remote = await fetch(targetUrl.toString(), {
+                method: req.method,
+                headers,
+                redirect: "follow",
+                signal: abort.signal,
+            });
+            copyMediaHeaders(remote, res);
+            res.writeHead(remote.status);
+            if (req.method === "HEAD" || !remote.body) {
+                res.end();
+                return;
+            }
+            await streamPipeline(remote.body, res);
+        }
+        catch (e) {
+            if (abort.signal.aborted || res.headersSent)
+                return;
+            res.writeHead(502).end(e?.message || "Media proxy error");
+        }
+    });
+    mediaProxyServer.on("error", (e) => {
+        electron_log_1.default.error("Media proxy error", e);
+    });
+    mediaProxyServer.listen(MEDIA_PROXY_PORT, MEDIA_PROXY_HOST, () => {
+        electron_log_1.default.info(`Media proxy listening on http://${MEDIA_PROXY_HOST}:${MEDIA_PROXY_PORT}`);
+    });
+}
+function stopMediaProxy() {
+    if (!mediaProxyServer)
+        return;
+    mediaProxyServer.close();
+    mediaProxyServer = null;
+}
 function ensureDir() {
     if (!node_fs_1.default.existsSync(MEDIA_DIR))
         node_fs_1.default.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -364,6 +493,7 @@ async function createWindow() {
     win.on("closed", () => (win = null));
 }
 electron_1.app.whenReady().then(async () => {
+    startMediaProxy();
     registerAppShortcuts(isDev);
     await createWindow();
 });
@@ -371,9 +501,11 @@ electron_1.app.whenReady().then(async () => {
 electron_1.app.on("before-quit", () => {
     unregisterAppShortcuts();
     stopKeepAwake();
+    stopMediaProxy();
 });
 electron_1.app.on("window-all-closed", () => {
     stopKeepAwake();
+    stopMediaProxy();
     if (process.platform !== "darwin")
         electron_1.app.quit();
 });

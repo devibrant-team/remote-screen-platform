@@ -517,7 +517,7 @@ export default function PlaylistPlayer({
   return (
     <div className="relative w-screen h-[100dvh] bg-white text-white overflow-hidden">
       {/* Debug Panel: يعرض وقت السيرفر + مدة الشريحة + كل تفاصيل التوقيت */}
-      <PlaylistDebugPanel
+      {/* <PlaylistDebugPanel
         slides={slides as PlaylistSlide[]}
         activeIndex={activeIndex}
         scheduleId={resolvedScheduleId}
@@ -529,7 +529,7 @@ export default function PlaylistPlayer({
         logicMsUntilNext={slideLogic.msUntilNextSlide}
         childStartTime={childStartTime ?? null}
         scheduleTimeline={scheduleTimeline}
-      />
+      /> */}
 
       {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
       <div

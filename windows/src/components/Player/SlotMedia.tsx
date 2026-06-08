@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { PlaylistSlot } from "../../types/schedule";
+import { normalizeMediaUrl } from "../../utils/mediaPrefetcher";
 
 type ScaleMode = "fit" | "fill" | "blur" | "original" | string;
 type MediaKind = "image" | "video";
 
-const MAX_RETRIES = 2;
-const RETRY_DELAY_MS = 750;
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
 
 const isVideo = (slot: PlaylistSlot) =>
   (slot.mediaType || "").toLowerCase() === "video";
@@ -104,7 +105,7 @@ export default function SlotMedia({
 
   if (failed) return <BlackFallback />;
 
-  const src = retryUrl(url, retry);
+  const src = normalizeMediaUrl(retryUrl(url, retry)) || "";
 
   const renderVideo = (
     className: string,

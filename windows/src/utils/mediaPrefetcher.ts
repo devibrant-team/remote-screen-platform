@@ -28,11 +28,15 @@ const inflightFetches = new Map<string, AbortController>();
 /** توحيد URL الميديا: إزالة cb=.. إن وُجد لمنع اختلافات بين التسخين والتشغيل */
 export function normalizeMediaUrl(url?: string): string | undefined {
   if (!url) return url;
-  const u = url
+  return url
     .replace(/([?&])cb=\d+(&|$)/, (_m, p1, p2) => (p2 ? p1 : ""))
     .replace(/\?&$/, "?")
     .replace(/\?$/, "");
-  return u;
+}
+
+export function toMediaProxyUrl(url?: string): string {
+  if (!url) return "";
+  return normalizeMediaUrl(url) || "";
 }
 
 /** Prefetch an image URL into the browser cache. */

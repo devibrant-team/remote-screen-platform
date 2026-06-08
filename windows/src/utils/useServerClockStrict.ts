@@ -29,7 +29,8 @@ const DAY_SEC = 86400;
 const resyncEveryMs = 10 * 60 * 1000; // 10 دقائق
 
 // حد RTT المقبول لعينة واحدة
-const maxRttMsForTrust = 1200; // 1.2s
+const maxRttMsForTrust = 5000; // 5s for LAN startup/reconnect
+const maxDelayMsForTrust = 8000;
 
 // لو الانحراف أقل من هيك منكمّل على offset القديم بدون rebase
 const driftThresholdSec = 0.3;
@@ -110,6 +111,9 @@ type Sample = {
   perfRef: number;
   perfRefDaySec: number;
   t3_epoch: number;
+  quality: "trusted" | "degraded";
+  trusted: boolean;
+  server_epoch_ms?: number;
 };
 
 type EngineState = State & {
@@ -211,7 +215,10 @@ async function takeOneSampleNtp(): Promise<Sample | null> {
     let t1 = json.server_rx_epoch_ms;
     let t2 = json.server_tx_epoch_ms;
 
-    if (t1 == null && t2 == null && json.server_epoch_ms != null) {
+    const usedEpochFallback =
+      t1 == null && t2 == null && json.server_epoch_ms != null;
+
+    if (usedEpochFallback) {
       t1 = json.server_epoch_ms;
       t2 = json.server_epoch_ms;
     }
@@ -224,14 +231,25 @@ async function takeOneSampleNtp(): Promise<Sample | null> {
     const offsetMs = (t1 - t0_epoch + (t2 - t3_epoch)) / 2;
     const rttMs = t3_perf - t0_perf;
 
-    if (delayMs < 0 || delayMs > 3000) return null;
-    if (rttMs > maxRttMsForTrust) return null;
+    if (delayMs < 0 || delayMs > maxDelayMsForTrust) return null;
+
+    const highRtt = rttMs > maxRttMsForTrust;
+    const degraded = usedEpochFallback && highRtt;
+    if (highRtt && !degraded) return null;
 
     const serverAtT3_epoch = t3_epoch + offsetMs;
 
     const serverSec = clampDay(epochMsToDaySecs(serverAtT3_epoch, tz));
     const perfRefDaySec = clampDay(t3_perf / 1000);
     const offsetSec = serverSec - perfRefDaySec;
+
+    if (degraded) {
+      console.log("[clock] sample accepted degraded", {
+        rttMs,
+        delayMs,
+        server_epoch_ms: json.server_epoch_ms,
+      });
+    }
 
     return {
       tz,
@@ -242,6 +260,9 @@ async function takeOneSampleNtp(): Promise<Sample | null> {
       perfRef: t3_perf,
       perfRefDaySec,
       t3_epoch,
+      quality: degraded ? "degraded" : "trusted",
+      trusted: !degraded,
+      server_epoch_ms: json.server_epoch_ms,
     };
   } catch {
     return null;
