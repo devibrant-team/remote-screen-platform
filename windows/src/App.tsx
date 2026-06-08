@@ -1,6 +1,7 @@
 // src/App.tsx
 import { HashRouter, Routes, Route } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import toast, { Toaster } from "react-hot-toast";
 
 import CreateScreen from "./Screen/CreateScreen";
@@ -16,6 +17,7 @@ import { useScreenTypeReverbWeb } from "./Hook/Device/useScreenTypeReverbWeb";
 // ✅ Screen refresh overlay (Tailwind)
 import ScreenRefreshOverlay from "./components/Alret/ScreenRefreshOverlay";
 import { useScreenRefreshReverbWeb } from "./Hook/Device/useScreenRefreshReverbWeb";
+import { clearServerIp, getServerIp, saveServerIp } from "./config/serverConfig";
 
 import "./index.css";
 
@@ -52,7 +54,41 @@ function closeUpdateToast() {
   toast.dismiss(UPDATE_TOAST_ID);
 }
 
-export default function App() {
+function ServerConfigScreen() {
+  const [serverIp, setServerIp] = useState("");
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!serverIp.trim()) return;
+    saveServerIp(serverIp);
+  };
+
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-zinc-950 px-6 text-white">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-sm rounded-lg border border-white/10 bg-zinc-900 p-6 shadow-2xl"
+      >
+        <h1 className="text-xl font-semibold">Server IP / Host</h1>
+        <input
+          autoFocus
+          value={serverIp}
+          onChange={(event) => setServerIp(event.target.value)}
+          placeholder="192.168.1.10"
+          className="mt-5 w-full rounded-md border border-white/10 bg-zinc-950 px-3 py-3 text-base text-white outline-none focus:border-white/40"
+        />
+        <button
+          type="submit"
+          className="mt-4 w-full rounded-md bg-white px-4 py-3 font-semibold text-zinc-950"
+        >
+          Save
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function AppShell() {
   useStatusHeartbeat();
   useScreenCheckGuardApi();
 
@@ -122,6 +158,13 @@ export default function App() {
     <div className="w-screen h-screen overflow-hidden">
       {/* ✅ Refresh UI overlay */}
       <ScreenRefreshOverlay show={showRefreshing} text="Updating screen…" />
+      <button
+        type="button"
+        onClick={clearServerIp}
+        className="fixed right-4 top-4 z-50 rounded-md bg-black/70 px-3 py-2 text-sm font-semibold text-white shadow-lg"
+      >
+        Change Server
+      </button>
 
       <Toaster
         position="top-center"
@@ -161,4 +204,9 @@ export default function App() {
       </HashRouter>
     </div>
   );
+}
+
+export default function App() {
+  if (!getServerIp()) return <ServerConfigScreen />;
+  return <AppShell />;
 }

@@ -1,5 +1,7 @@
 //src/Api/Api.ts
-export const http = "http://172.20.10.2:8000/api/";
+import { apiBase } from "../config/serverConfig";
+
+export const http = apiBase();
 export const CreateScreenApi = `${http}create/screen/windows`
 export const GetParentScheduleApi = `${http}showschedule`;
 export const GetChildPlaylistApi = `${http}showscheduleplaylist`;

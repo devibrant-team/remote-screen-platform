@@ -1,37 +1,37 @@
-const KEY = "iguana_server_host";
+const KEY = "serverIp";
 
-export function getServerHost() {
+export function getServerIp() {
   return localStorage.getItem(KEY) || "";
 }
 
-export function saveServerHost(host: string) {
-  const clean = host
+export function saveServerIp(serverIp: string) {
+  const clean = serverIp
     .replace(/^https?:\/\//, "")
-    .replace(/\/$/, "")
+    .replace(/\/+$/, "")
     .trim();
 
   localStorage.setItem(KEY, clean);
   window.location.reload();
 }
 
-export function hasServerHost() {
-  return !!getServerHost();
+export function clearServerIp() {
+  localStorage.removeItem(KEY);
+  window.location.reload();
+}
+
+export function hasServerIp() {
+  return !!getServerIp();
 }
 
 export function apiBase() {
-  const host = getServerHost();
-  if (!host) throw new Error("Server host not configured");
-  return `http://${host}:8000/api/`;
+  return `http://${getServerIp()}:8000/api/`;
 }
 
 export function reverbConfig() {
-  const host = getServerHost();
-  if (!host) throw new Error("Server host not configured");
-
   return {
     key: "o4ywhiewiedmeup8avwi",
-    host,
+    host: getServerIp(),
     port: 8080,
     scheme: "http",
   };
-} 
+}

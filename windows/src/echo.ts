@@ -1,6 +1,7 @@
 // echo.ts
 import Echo from "laravel-echo";
 import Pusher from "pusher-js";
+import { reverbConfig } from "./config/serverConfig";
 
 declare global {
   interface Window {
@@ -11,12 +12,14 @@ declare global {
 
 window.Pusher = Pusher;
 
+const reverb = reverbConfig();
+
 export const echo = new Echo({
   broadcaster: "reverb",
-  key: import.meta.env.VITE_REVERB_APP_KEY,
-  wsHost: import.meta.env.VITE_REVERB_HOST,
-  wsPort: Number(import.meta.env.VITE_REVERB_PORT ?? 80),
-  wssPort: Number(import.meta.env.VITE_REVERB_PORT ?? 443),
+  key: reverb.key,
+  wsHost: reverb.host,
+  wsPort: reverb.port,
+  wssPort: reverb.port,
   forceTLS: false, // We'll handle TLS via wsHost (ws:// vs wss://)
   enabledTransports: ["ws"],
 });
