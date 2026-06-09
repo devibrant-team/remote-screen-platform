@@ -31,6 +31,12 @@ const updater = {
   },
 };
 
+const iguana = {
+  pingServer: (address: string): Promise<boolean> =>
+    ipcRenderer.invoke("ping-server", address),
+};
+
 contextBridge.exposeInMainWorld("signage", signage);
 contextBridge.exposeInMainWorld("mediaCache", mediaCache);
 contextBridge.exposeInMainWorld("updater", updater);
+contextBridge.exposeInMainWorld("iguana", iguana);

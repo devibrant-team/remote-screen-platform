@@ -8,5 +8,8 @@ declare global {
       saveScreenId: (screenId: string) => Promise<{ ok: boolean }>;
       resetDevice: () => Promise<{ ok: boolean }>;
     };
+    iguana: {
+      pingServer: (address: string) => Promise<boolean>;
+    };
   }
 }

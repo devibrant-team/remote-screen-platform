@@ -4,6 +4,7 @@ import path from "node:path";
 
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import { createHash } from "node:crypto";
 import { pipeline } from "node:stream";
 import { promisify } from "node:util";
@@ -32,6 +33,35 @@ const MEDIA_PROXY_EXPOSED_HEADERS = [
   "content-range",
   "accept-ranges",
 ];
+
+function normalizeServerAddress(address: string) {
+  return String(address || "")
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "")
+    .trim();
+}
+
+function pingServerAddress(address: string): Promise<boolean> {
+  const host = normalizeServerAddress(address);
+  if (!host) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port: 8000 });
+    let settled = false;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+
+    socket.setTimeout(5000);
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.once("timeout", () => finish(false));
+  });
+}
 
 type IndexRec = { p: string; s: number; t: number };
 type IndexMap = Record<string, IndexRec>;
@@ -249,6 +279,10 @@ ipcMain.handle("media-cache:map", async (_evt, urls: string[]) => {
   await evictIfNeeded(ix);
   saveIndex(ix);
   return results;
+});
+
+ipcMain.handle("ping-server", async (_evt, address: string) => {
+  return pingServerAddress(address);
 });
 
 /* ──────────────────────────────────────────────────────────────

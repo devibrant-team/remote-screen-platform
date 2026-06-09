@@ -41,14 +41,14 @@ export function usePlaylistHealth(opts: Options) {
   const reportGlitch = (slideId?: string | number, reason?: string) => {
     hasGlitchInLoop.current = true;
 
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[PlaylistHealth] glitch detected", {
-        slideId,
-        reason,
-        scheduleId: opts.scheduleId,
-        source: opts.source,
-      });
-    }
+    // if (process.env.NODE_ENV !== "production") {
+    //   console.log("[PlaylistHealth] glitch detected", {
+    //     slideId,
+    //     reason,
+    //     scheduleId: opts.scheduleId,
+    //     source: opts.source,
+    //   });
+    // }
   };
 
   /**

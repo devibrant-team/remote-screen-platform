@@ -1,212 +1,194 @@
-// src/App.tsx
-import { HashRouter, Routes, Route } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import toast, { Toaster } from "react-hot-toast";
 
-import CreateScreen from "./Screen/CreateScreen";
-import HomeScreen from "./Screen/HomeScreen";
-import { useStatusHeartbeat } from "./Hook/Device/useStatusHeartbeat";
-import { useScreenCheckGuardApi } from "./Hook/Device/useScreenCheckGuardApi";
-import { ServerClockToast } from "./components/Alret/ServerClockToast";
-
-// ✅ Screen type hooks
-import { useScreenTypeApiWeb } from "./Hook/Device/useScreenTypeApiWeb";
-import { useScreenTypeReverbWeb } from "./Hook/Device/useScreenTypeReverbWeb";
-
-// ✅ Screen refresh overlay (Tailwind)
-import ScreenRefreshOverlay from "./components/Alret/ScreenRefreshOverlay";
-import { useScreenRefreshReverbWeb } from "./Hook/Device/useScreenRefreshReverbWeb";
-import { clearServerIp, getServerIp, saveServerIp } from "./config/serverConfig";
+import {
+  checkServerReachable,
+  clearServerIp,
+  connectWithRetry,
+  getServerIp,
+  normalizeServerIp,
+  saveServerIp,
+} from "./config/serverConfig";
 
 import "./index.css";
 
-const UPDATE_TOAST_ID = "app-update-toast";
+const AppShell = lazy(() => import("./AppShell"));
+const MAX_ATTEMPTS = 5;
+const RETRY_DELAY_MS = 15000;
+const SAVED_ADDRESS_ERROR =
+  "Could not connect to the server. The address may have changed. Please enter the new server address.";
+const MANUAL_CONNECT_ERROR =
+  "Could not connect to the server. Please check the address and try again.";
 
-function showUpdateToast(message: string) {
-  toast.loading(message, { id: UPDATE_TOAST_ID });
-}
+type AppState = "needs-config" | "checking-saved" | "checking-manual" | "ready";
 
-function showUpdateProgress(percent: number) {
-  const p = Math.max(0, Math.min(100, Math.round(percent || 0)));
-
-  toast.loading(
-    <div className="w-full">
-      <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold">Downloading update…</div>
-        <div className="tabular-nums">{p}%</div>
-      </div>
-
-      <div className="mt-3 h-2 w-full rounded-full bg-white/15 overflow-hidden">
-        <div
-          className="h-full rounded-full bg-white"
-          style={{ width: `${p}%` }}
-        />
-      </div>
-
-      <div className="mt-2 text-sm opacity-80">Please don’t close the app.</div>
-    </div>,
-    { id: UPDATE_TOAST_ID }
+function LoadingScreen() {
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-white">
+      <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-200 border-t-red-600" />
+    </div>
   );
 }
 
-function closeUpdateToast() {
-  toast.dismiss(UPDATE_TOAST_ID);
-}
+type ServerConnectScreenProps = {
+  state: AppState;
+  error: string;
+  attemptText: string;
+  countdown: number;
+  onConnect: (serverAddress: string) => void;
+};
 
-function ServerConfigScreen() {
-  const [serverIp, setServerIp] = useState("");
+function ServerConnectScreen({
+  state,
+  error,
+  attemptText,
+  countdown,
+  onConnect,
+}: ServerConnectScreenProps) {
+  const [serverAddress, setServerAddress] = useState("");
+  const isChecking = state === "checking-manual" || state === "checking-saved";
+  const showRetryStatus = state === "checking-saved";
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!serverIp.trim()) return;
-    saveServerIp(serverIp);
+    const clean = normalizeServerIp(serverAddress);
+    if (!clean || isChecking) return;
+    onConnect(clean);
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-zinc-950 px-6 text-white">
+    <div className="flex min-h-screen w-screen items-center justify-center bg-white px-5 py-8 text-zinc-950">
       <form
         onSubmit={submit}
-        className="w-full max-w-sm rounded-lg border border-white/10 bg-zinc-900 p-6 shadow-2xl"
+        className="w-full max-w-md rounded-2xl border border-zinc-100 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.14)] sm:p-8"
       >
-        <h1 className="text-xl font-semibold">Server IP / Host</h1>
+        <div className="mb-6">
+          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-red-600">
+            Windows Screen Iguana
+          </p>
+          <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
+            Connect to Server
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-zinc-500">
+            Enter the server address for this display. The screen will open
+            once the connection is ready.
+          </p>
+        </div>
+
+        <label
+          className="text-sm font-medium text-zinc-700"
+          htmlFor="serverAddress"
+        >
+          Server Address
+        </label>
         <input
+          id="serverAddress"
           autoFocus
-          value={serverIp}
-          onChange={(event) => setServerIp(event.target.value)}
-          placeholder="192.168.1.10"
-          className="mt-5 w-full rounded-md border border-white/10 bg-zinc-950 px-3 py-3 text-base text-white outline-none focus:border-white/40"
+          disabled={isChecking}
+          value={serverAddress}
+          onChange={(event) => setServerAddress(event.target.value)}
+          placeholder="Server Address"
+          className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-base text-zinc-950 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-red-500 focus:ring-4 focus:ring-red-100 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-500"
         />
+
         <button
           type="submit"
-          className="mt-4 w-full rounded-md bg-white px-4 py-3 font-semibold text-zinc-950"
+          disabled={isChecking || !serverAddress.trim()}
+          className="mt-5 w-full rounded-xl bg-red-600 px-4 py-3 font-semibold text-white shadow-lg shadow-red-100 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-200"
         >
-          Save
+          {isChecking ? "Connecting..." : "Connect"}
         </button>
+
+        <div className="mt-4 min-h-14 text-sm">
+          {showRetryStatus && attemptText && (
+            <p className="font-medium text-zinc-700">{attemptText}</p>
+          )}
+          {showRetryStatus && countdown > 0 && (
+            <p className="mt-1 text-zinc-500">
+              Retrying in {countdown} seconds
+            </p>
+          )}
+          {error && <p className="text-red-600">{error}</p>}
+        </div>
       </form>
     </div>
   );
 }
 
-function AppShell() {
-  useStatusHeartbeat();
-  useScreenCheckGuardApi();
+export default function App() {
+  const savedServerAddress = getServerIp();
+  const [appState, setAppState] = useState<AppState>(() =>
+    savedServerAddress ? "checking-saved" : "needs-config"
+  );
+  const [error, setError] = useState("");
+  const [attemptText, setAttemptText] = useState("");
+  const [countdown, setCountdown] = useState(0);
 
-  // ✅ Apply initial type from API then listen live from Reverb
-  useScreenTypeApiWeb();
-  useScreenTypeReverbWeb();
+  const resetStatus = () => {
+    setError("");
+    setAttemptText("");
+    setCountdown(0);
+  };
 
-  // ✅ Listen ScreenRefresh + show overlay
-  const { showRefreshing } = useScreenRefreshReverbWeb();
+  const connectSavedAddress = async (serverAddress: string) => {
+    setAppState("checking-saved");
+    resetStatus();
+
+    try {
+      await connectWithRetry(serverAddress, {
+        maxAttempts: MAX_ATTEMPTS,
+        delayMs: RETRY_DELAY_MS,
+        onAttempt: (attempt, maxAttempts) => {
+          setAttemptText(`Attempt ${attempt} of ${maxAttempts}`);
+          setCountdown(0);
+        },
+        onCountdown: setCountdown,
+      });
+      setAppState("ready");
+    } catch {
+      clearServerIp();
+      setError(SAVED_ADDRESS_ERROR);
+      setAppState("needs-config");
+    }
+  };
+
+  const connectManualAddress = async (serverAddress: string) => {
+    setAppState("checking-manual");
+    resetStatus();
+
+    try {
+      const reachable = await checkServerReachable(serverAddress);
+      if (!reachable) throw new Error("Server unreachable");
+
+      saveServerIp(serverAddress);
+      setAppState("ready");
+    } catch {
+      clearServerIp();
+      setError(MANUAL_CONNECT_ERROR);
+      setAppState("needs-config");
+    }
+  };
 
   useEffect(() => {
-    const w = window as any;
-    if (!w.updater?.onEvent) return;
-
-    let lastShownPercent = -1;
-
-    const off = w.updater.onEvent((e: any) => {
-      if (!e?.type) return;
-
-      if (e.type === "checking") {
-        showUpdateToast("Checking for updates…");
-        return;
-      }
-
-      if (e.type === "available") {
-        showUpdateToast("Update available. Starting download…");
-        return;
-      }
-
-      if (e.type === "none") {
-        closeUpdateToast();
-        // optional: keep this or remove it
-        toast.success("You’re up to date.");
-        return;
-      }
-
-      if (e.type === "progress") {
-        const p = Math.round(e.percent || 0);
-
-        // ✅ reduce UI spam (some updaters emit MANY progress events)
-        if (p === lastShownPercent) return;
-        lastShownPercent = p;
-
-        showUpdateProgress(p);
-        return;
-      }
-
-      if (e.type === "downloaded") {
-        toast.success("Update downloaded. Installing…", { id: UPDATE_TOAST_ID });
-        // small delay so user sees the “Installing…” state
-        setTimeout(() => w.updater.install(), 600);
-        return;
-      }
-
-      if (e.type === "error") {
-        toast.error(`Update error: ${e.message || "Unknown error"}`, {
-          id: UPDATE_TOAST_ID,
-        });
-        return;
-      }
-    });
-
-    return off;
+    if (!savedServerAddress) return;
+    void connectSavedAddress(savedServerAddress);
   }, []);
 
+  if (appState === "ready") {
+    return (
+      <Suspense fallback={<LoadingScreen />}>
+        <AppShell />
+      </Suspense>
+    );
+  }
+
   return (
-    <div className="w-screen h-screen overflow-hidden">
-      {/* ✅ Refresh UI overlay */}
-      <ScreenRefreshOverlay show={showRefreshing} text="Updating screen…" />
-      <button
-        type="button"
-        onClick={clearServerIp}
-        className="fixed right-4 top-4 z-50 rounded-md bg-black/70 px-3 py-2 text-sm font-semibold text-white shadow-lg"
-      >
-        Change Server
-      </button>
-
-      <Toaster
-        position="top-center"
-        containerStyle={{
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-        }}
-        toastOptions={{
-          duration: 5000, // ✅ keep update toast “sticky”; we dismiss manually
-          style: {
-            background: "rgba(20, 20, 20, 0.95)",
-            color: "#fff",
-            padding: "18px 22px",
-            fontSize: "16px",
-            fontWeight: 600,
-            borderRadius: "14px",
-            boxShadow:
-              "0 20px 50px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05)",
-            maxWidth: "92vw",
-            textAlign: "left",
-            minWidth: "360px",
-            lineHeight: 1.35,
-          },
-        }}
-      />
-
-      <ServerClockToast />
-
-      <HashRouter>
-        <CreateScreen />
-
-        <Routes>
-          <Route path="/" element={<HomeScreen />} />
-          <Route path="/register" element={<CreateScreen />} />
-        </Routes>
-      </HashRouter>
-    </div>
+    <ServerConnectScreen
+      state={appState}
+      error={error}
+      attemptText={attemptText}
+      countdown={countdown}
+      onConnect={(serverAddress) => void connectManualAddress(serverAddress)}
+    />
   );
-}
-
-export default function App() {
-  if (!getServerIp()) return <ServerConfigScreen />;
-  return <AppShell />;
 }
