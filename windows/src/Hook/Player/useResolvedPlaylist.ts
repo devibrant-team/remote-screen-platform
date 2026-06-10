@@ -346,6 +346,17 @@ export function useResolvedPlaylist(screenId?: string) {
     await qc.refetchQueries({ queryKey: parentKey, type: "active" });
     if (childKey)
       await qc.refetchQueries({ queryKey: childKey, type: "active" });
+    if (screenId && sid != null && childKey) {
+      console.log("[WINDOWS CHILD EXACT REFETCH START]", {
+        screenId,
+        scheduleId: sid,
+      });
+      await qc.refetchQueries({ queryKey: childKey, exact: true, type: "all" });
+      console.log("[WINDOWS CHILD EXACT REFETCH DONE]", {
+        screenId,
+        scheduleId: sid,
+      });
+    }
     await qc.refetchQueries({ queryKey: defaultKey, type: "active" });
   }, [activeScheduleIdFinal, qc, screenId]);
 

@@ -179,7 +179,7 @@ async function takeOneSampleNtp(): Promise<Sample | null> {
     const t0_perf = performance.now();
     const t0_epoch = Date.now();
 
-    const resp = await fetch(TimeClockApi, {
+    const resp = await fetch(TimeClockApi(), {
       method: "GET",
       mode: "cors",
       cache: "no-store",

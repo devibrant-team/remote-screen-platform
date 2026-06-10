@@ -18,11 +18,12 @@ function normalizeType(v: any): ScreenType {
   return t;
 }
 
-async function fetchRotationType(screenCode: string): Promise<ScreenType> {
+async function fetchRotationType(): Promise<ScreenType> {
   // ✅ get token from device state (Electron → localStorage fallback)
   const { token } = await loadDeviceState();
 
-  const url = `${GetRotationApi}${encodeURIComponent(screenCode)}`;
+  const url = GetRotationApi();
+  console.log("[WINDOWS SCREEN TYPE API]", url);
 
   const { data } = await axios.get<RotationApiReply>(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -50,7 +51,7 @@ export function useScreenTypeApiWeb() {
       if (!screenId) return;
 
       try {
-        const apiType = await fetchRotationType(screenId);
+        const apiType = await fetchRotationType();
         if (!mounted.current) return;
 
         if (apiType) {

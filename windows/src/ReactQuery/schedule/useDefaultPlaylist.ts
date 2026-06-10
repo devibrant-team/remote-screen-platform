@@ -31,7 +31,7 @@ export async function fetchDefaultPlaylist(
   screenId: number | string
 ): Promise<ChildPlaylistResponse> {
   const token = localStorage.getItem(LS_TOKEN) ?? "";
-  const { data } = await axios.get(`${DefaultPlayListApi}/${screenId}`, {
+  const { data } = await axios.get(`${DefaultPlayListApi()}/${screenId}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
   return normalizeDefaultResp(data);

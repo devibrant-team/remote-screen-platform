@@ -12,18 +12,6 @@ declare global {
 
 window.Pusher = Pusher;
 
-const reverb = reverbConfig();
-
-export const echo = new Echo({
-  broadcaster: "reverb",
-  key: reverb.key,
-  wsHost: reverb.host,
-  wsPort: reverb.port,
-  wssPort: reverb.port,
-  forceTLS: false, // We'll handle TLS via wsHost (ws:// vs wss://)
-  enabledTransports: ["ws"],
-});
-
 // ---- Connection status handling ----
 type ConnState =
   | "initialized"
@@ -34,17 +22,17 @@ type ConnState =
   | "failed";
 
 let currentState: ConnState =
-  (echo.connector as any).pusher?.connection?.state ?? "initialized";
+  "initialized";
 
 const listeners = new Set<(s: ConnState) => void>();
+let echoInstance: Echo<"reverb"> | null = null;
+let pusherInstance: any = null;
+let echoInstanceId = 0;
 
 function setState(next: ConnState) {
   currentState = next;
   listeners.forEach((cb) => cb(next));
 }
-
-// Under the hood Echo uses pusher-js, so we bind to pusher connection events:
-const pusher = (echo.connector as any).pusher;
 
 // All state changes (previous/current)
 const handleStateChange = ({
@@ -55,11 +43,6 @@ const handleStateChange = ({
 }) => {
   setState(current);
 };
-
-pusher.connection.bind(
-  "state_change",
-  handleStateChange
-);
 
 // Specific events you might want to log
 const handleConnected = () => console.log("[Reverb] ✅ Connected");
@@ -74,26 +57,92 @@ const handleConnectionErrorWarn = (err: unknown) => {
   console.warn("Reverb connection error", err);
 };
 
-pusher?.connection.bind("connected", handleConnected);
-pusher?.connection.bind("connecting", handleConnecting);
-pusher?.connection.bind("disconnected", handleDisconnected);
-pusher?.connection.bind("unavailable", handleUnavailable);
-pusher?.connection.bind("failed", handleFailed);
-pusher?.connection.bind("error", handleConnectionErrorLog);
+function bindPusher(pusher: any) {
+  pusher?.connection?.bind("state_change", handleStateChange);
+  pusher?.connection?.bind("connected", handleConnected);
+  pusher?.connection?.bind("connecting", handleConnecting);
+  pusher?.connection?.bind("disconnected", handleDisconnected);
+  pusher?.connection?.bind("unavailable", handleUnavailable);
+  pusher?.connection?.bind("failed", handleFailed);
+  pusher?.connection?.bind("error", handleConnectionErrorLog);
+  pusher?.connection?.bind("error", handleConnectionErrorWarn);
+  currentState = pusher?.connection?.state ?? "initialized";
+}
 
-// Optional error hook
-pusher.connection.bind("error", handleConnectionErrorWarn);
+function unbindPusher(pusher: any) {
+  pusher?.connection?.unbind("state_change", handleStateChange);
+  pusher?.connection?.unbind("connected", handleConnected);
+  pusher?.connection?.unbind("connecting", handleConnecting);
+  pusher?.connection?.unbind("disconnected", handleDisconnected);
+  pusher?.connection?.unbind("unavailable", handleUnavailable);
+  pusher?.connection?.unbind("failed", handleFailed);
+  pusher?.connection?.unbind("error", handleConnectionErrorLog);
+  pusher?.connection?.unbind("error", handleConnectionErrorWarn);
+}
+
+function createEcho(reason: string) {
+  const reverb = reverbConfig();
+  const instanceId = ++echoInstanceId;
+  console.log("[WINDOWS REVERB CONFIG]", {
+    host: reverb.host,
+    port: reverb.port,
+    scheme: reverb.scheme,
+    reason,
+    instanceId,
+  });
+
+  const instance = new Echo({
+    broadcaster: "reverb",
+    key: reverb.key,
+    wsHost: reverb.host,
+    wsPort: reverb.port,
+    wssPort: reverb.port,
+    forceTLS: reverb.scheme === "https",
+    enabledTransports: ["ws"],
+  });
+
+  echoInstance = instance;
+  pusherInstance = (instance.connector as any).pusher;
+  bindPusher(pusherInstance);
+  setState(currentState);
+  return instance;
+}
+
+export function getEcho() {
+  return echoInstance ?? createEcho("lazy-init");
+}
+
+export function rebuildEcho(reason = "rebuild") {
+  const oldEcho = echoInstance;
+  const oldPusher = pusherInstance;
+
+  try {
+    unbindPusher(oldPusher);
+    oldEcho?.disconnect();
+  } catch (err) {
+    console.warn("[Reverb] error while rebuilding Echo", err);
+  }
+
+  echoInstance = null;
+  pusherInstance = null;
+  setState("initialized");
+  return createEcho(reason);
+}
+
+export const resetEchoForServerChange = rebuildEcho;
+
+export const echo = new Proxy({} as Echo<"reverb">, {
+  get(_target, prop, receiver) {
+    const instance = getEcho();
+    const value = Reflect.get(instance as any, prop, receiver);
+    return typeof value === "function" ? value.bind(instance) : value;
+  },
+});
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    pusher?.connection.unbind("state_change", handleStateChange);
-    pusher?.connection.unbind("connected", handleConnected);
-    pusher?.connection.unbind("connecting", handleConnecting);
-    pusher?.connection.unbind("disconnected", handleDisconnected);
-    pusher?.connection.unbind("unavailable", handleUnavailable);
-    pusher?.connection.unbind("failed", handleFailed);
-    pusher?.connection.unbind("error", handleConnectionErrorLog);
-    pusher?.connection.unbind("error", handleConnectionErrorWarn);
+    unbindPusher(pusherInstance);
+    echoInstance?.disconnect();
   });
 }
 
@@ -137,6 +186,7 @@ export const ReverbConnection = {
   /** force reconnect (rarely needed; Echo auto-reconnects) */
   reconnect(): void {
     try {
+      const pusher = pusherInstance ?? (getEcho().connector as any).pusher;
       pusher.disconnect();
       pusher.connect();
     } catch {

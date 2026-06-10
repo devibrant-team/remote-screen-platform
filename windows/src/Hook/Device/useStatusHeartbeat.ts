@@ -18,7 +18,7 @@ export function useStatusHeartbeat() {
       try {
         // ✅ Correct endpoint: /status/{id}
         await axios.post(
-          `${SendStatusApi}${screenId}`,
+          `${SendStatusApi()}${screenId}`,
           {},
           { headers: { Authorization: `Bearer ${token}` } }
         );

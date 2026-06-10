@@ -22,7 +22,7 @@ export interface CreateScreenResponse {
 
 // POST with no body; map the response
 async function createScreenRequest(): Promise<CreateScreenResponse> {
-  const res = await axios.post<ApiCreateScreenResponse>(CreateScreenApi, {});
+  const res = await axios.post<ApiCreateScreenResponse>(CreateScreenApi(), {});
   const raw = res.data;
   return { screenId: String(raw.id), code: Number(raw.code), raw };
 }

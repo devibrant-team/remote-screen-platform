@@ -40,7 +40,7 @@ export async function fetchChildPlaylist(
   screenId?: number | string
 ): Promise<ChildPlaylistResponse> {
   const token = localStorage.getItem(LS_TOKEN) ?? "";
-  const { data } = await axios.get(`${GetChildPlaylistApi}/${scheduleId}`, {
+  const { data } = await axios.get(`${GetChildPlaylistApi()}/${scheduleId}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     params: screenId ? { screen_id: screenId } : undefined,
   });

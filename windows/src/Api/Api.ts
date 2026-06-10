@@ -1,12 +1,19 @@
 //src/Api/Api.ts
 import { apiBase } from "../config/serverConfig";
 
-export const http = apiBase();
-export const CreateScreenApi = `${http}create/screen/windows`
-export const GetParentScheduleApi = `${http}showschedule`;
-export const GetChildPlaylistApi = `${http}showscheduleplaylist`;
-export const DefaultPlayListApi = `${http}showsdefault`
-export const SendStatusApi = `${http}status/`;
-export const TimeClockApi = `${http}servertime`;
-export const CheckScreenApi = `${http}checkscreen/`;
-export const GetRotationApi = `${http}showrotation/`;
+export function http() {
+  const baseUrl = apiBase();
+  console.log("[WINDOWS API CONFIG]", { baseUrl });
+  return baseUrl;
+}
+
+const endpoint = (path: string) => `${http()}${path}`;
+
+export const CreateScreenApi = () => endpoint("create/screen/windows");
+export const GetParentScheduleApi = () => endpoint("showschedule");
+export const GetChildPlaylistApi = () => endpoint("showscheduleplaylist");
+export const DefaultPlayListApi = () => endpoint("showsdefault");
+export const SendStatusApi = () => endpoint("status/");
+export const TimeClockApi = () => endpoint("servertime");
+export const CheckScreenApi = () => endpoint("checkscreen/");
+export const GetRotationApi = () => endpoint("showrotation");

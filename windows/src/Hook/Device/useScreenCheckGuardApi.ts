@@ -17,7 +17,7 @@ export function useScreenCheckGuardApi() {
 
     (async () => {
       try {
-        const url = `${CheckScreenApi}${idStr}`;
+        const url = `${CheckScreenApi()}${idStr}`;
         console.log("[ScreenCheck] 🔍 single check:", url);
 
         const res = await fetch(url, { method: "GET" });

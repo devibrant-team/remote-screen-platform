@@ -156,6 +156,11 @@ const canWriteNowPlaying = () => {
     screenId?: string | number;
     scheduleId?: string | number;
   }>({});
+  const quietRefreshInFlight = useRef(false);
+  const queuedQuietRefresh = useRef<{
+    scheduleId: number | string | null;
+    source: RefreshSource;
+  } | null>(null);
 
   useEffect(() => {
     latest.current = { screenId, scheduleId: activeScheduleId };
@@ -187,6 +192,7 @@ const canWriteNowPlaying = () => {
 
   const currentHash = useRef<string>(hashPlaylist(current as any));
   const swapAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
+  const swapTokenRef = useRef(0);
 
   const blockTargetUntil = useRef<number>(0);
 
@@ -197,6 +203,12 @@ const canWriteNowPlaying = () => {
 
     swapAbortRef.current.aborted = true;
     swapAbortRef.current = { aborted: false };
+    const abortObj = swapAbortRef.current;
+    const token = ++swapTokenRef.current;
+    const oldPlaylistHash = currentHash.current;
+    const oldPlaylistId = (current as any)?.id ?? null;
+    const newPlaylistHash = targetHash;
+    const newPlaylistId = (targetPlaylist as any)?.id ?? null;
 
     setNextPl(targetPlaylist);
     setNextReady(false);
@@ -204,11 +216,30 @@ const canWriteNowPlaying = () => {
     (async () => {
       const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
       await warmPlaylistLight(targetPlaylist, winCount, 800);
-      if (swapAbortRef.current.aborted) return;
+      if (abortObj.aborted || token !== swapTokenRef.current) {
+        console.log("[WINDOWS SWAP STALE IGNORED]", {
+          token,
+          currentToken: swapTokenRef.current,
+        });
+        return;
+      }
       setNextReady(true);
 
       setTimeout(() => {
-        if (swapAbortRef.current.aborted) return;
+        if (abortObj.aborted || token !== swapTokenRef.current) {
+          console.log("[WINDOWS SWAP STALE IGNORED]", {
+            token,
+            currentToken: swapTokenRef.current,
+          });
+          return;
+        }
+        console.log("[WINDOWS SWAP COMMIT]", {
+          token,
+          oldPlaylistId,
+          oldPlaylistHash,
+          newPlaylistId,
+          newPlaylistHash,
+        });
         setCurrent(targetPlaylist);
         currentHash.current = targetHash;
         setNextPl(null);
@@ -217,9 +248,9 @@ const canWriteNowPlaying = () => {
     })();
 
     return () => {
-      swapAbortRef.current.aborted = true;
+      abortObj.aborted = true;
     };
-  }, [targetPlaylist, netMode]);
+  }, [targetPlaylist, netMode, current]);
 
   useEffect(() => {
     if (!canWriteNowPlaying()) return;
@@ -238,9 +269,26 @@ const canWriteNowPlaying = () => {
     overrideScheduleId?: number | string | null,
     source: RefreshSource = "manual"
   ) => {
+    if (!screenId) {
+      console.log("[WINDOWS QUIET REFRESH SKIPPED_NO_SCREEN]");
+      return;
+    }
+
     const sid = overrideScheduleId ?? latest.current.scheduleId ?? null;
 
-    console.log("[Refresh] quietRefresh start", {
+    if (quietRefreshInFlight.current) {
+      queuedQuietRefresh.current = { scheduleId: sid, source };
+      console.log("[WINDOWS QUIET REFRESH QUEUED]", {
+        source,
+        screenId,
+        scheduleId: sid,
+      });
+      return;
+    }
+
+    quietRefreshInFlight.current = true;
+
+    console.log("[WINDOWS QUIET REFRESH START]", {
       source,
       screenId,
       scheduleId: sid,
@@ -258,6 +306,20 @@ const canWriteNowPlaying = () => {
         scheduleId: sid,
         err,
       });
+    }
+
+    console.log("[WINDOWS QUIET REFRESH DONE]", {
+      source,
+      screenId,
+      scheduleId: sid,
+    });
+
+    quietRefreshInFlight.current = false;
+
+    const queued = queuedQuietRefresh.current;
+    queuedQuietRefresh.current = null;
+    if (queued) {
+      void quietRefresh(queued.scheduleId, queued.source);
     }
   }, [quietRefreshAll, screenId]);
 

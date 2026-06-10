@@ -18,7 +18,7 @@ export async function fetchParentSchedules(
 ): Promise<ParentScheduleResponse> {
   const token = localStorage.getItem(LS_TOKEN) ?? "";
   const { data } = await axios.get<ParentScheduleResponse>(
-    `${GetParentScheduleApi}/${screenId}`,
+    `${GetParentScheduleApi()}/${screenId}`,
     { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
   );
   return data;

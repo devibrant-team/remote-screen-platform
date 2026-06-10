@@ -9,6 +9,7 @@ import {
   normalizeServerIp,
   saveServerIp,
 } from "./config/serverConfig";
+import { resetEchoForServerChange } from "./echo";
 
 import "./index.css";
 
@@ -144,6 +145,8 @@ export default function App() {
         },
         onCountdown: setCountdown,
       });
+      saveServerIp(serverAddress);
+      resetEchoForServerChange("saved-server-confirmed");
       setAppState("ready");
     } catch {
       clearServerIp();
@@ -161,6 +164,7 @@ export default function App() {
       if (!reachable) throw new Error("Server unreachable");
 
       saveServerIp(serverAddress);
+      resetEchoForServerChange("manual-server-confirmed");
       setAppState("ready");
     } catch {
       clearServerIp();
