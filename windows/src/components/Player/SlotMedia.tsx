@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PlaylistSlot } from "../../types/schedule";
 import { normalizeMediaUrl } from "../../utils/mediaPrefetcher";
+import iguanaLogo from "../../assets/Logo.png";
 
 type ScaleMode = "fit" | "fill" | "blur" | "original" | string;
 type MediaKind = "image" | "video";
@@ -34,7 +35,16 @@ function retryUrl(url: string, retry: number) {
 }
 
 function BlackFallback() {
-  return <div className="absolute inset-0 bg-black" />;
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-black">
+      <img
+        src={iguanaLogo}
+        alt="Iguana"
+        className="h-10 w-10 object-contain opacity-90"
+        draggable={false}
+      />
+    </div>
+  );
 }
 
 export default function SlotMedia({
@@ -53,18 +63,24 @@ export default function SlotMedia({
 
   const [retry, setRetry] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [painted, setPainted] = useState(false);
   const reportedRef = useRef(false);
   const retryTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setRetry(0);
     setFailed(!url);
+    setPainted(false);
     reportedRef.current = false;
     if (retryTimerRef.current != null) {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
-  }, [url]);
+  }, [url, kind]);
+
+  useEffect(() => {
+    setPainted(false);
+  }, [retry, kind]);
 
   useEffect(() => {
     return () => {
@@ -107,10 +123,25 @@ export default function SlotMedia({
 
   const src = normalizeMediaUrl(retryUrl(url, retry)) || "";
 
+  const LoadingOverlay = () => (
+    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black">
+      <div className="flex flex-col items-center text-white">
+        <img
+          src={iguanaLogo}
+          alt="Iguana"
+          className="h-10 w-10 object-contain opacity-90"
+          draggable={false}
+        />
+        <span className="mt-2 text-xs font-medium">Loading...</span>
+      </div>
+    </div>
+  );
+
   const renderVideo = (
     className: string,
     registerRef = true,
-    background = false
+    background = false,
+    markReady = true
   ) => (
     <video
       key={`${src}:video`}
@@ -122,11 +153,13 @@ export default function SlotMedia({
       preload="auto"
       loop={background}
       autoPlay={background}
+      onLoadedData={markReady ? () => setPainted(true) : undefined}
+      onCanPlay={markReady ? () => setPainted(true) : undefined}
       onError={registerRef ? handlePrimaryError : undefined}
     />
   );
 
-  const renderImage = (className: string, primary = true) => (
+  const renderImage = (className: string, primary = true, markReady = true) => (
     <img
       key={`${src}:image`}
       src={src}
@@ -134,6 +167,7 @@ export default function SlotMedia({
       className={className}
       loading="eager"
       draggable={false}
+      onLoad={markReady ? () => setPainted(true) : undefined}
       onError={primary ? handlePrimaryError : undefined}
     />
   );
@@ -141,6 +175,7 @@ export default function SlotMedia({
   if (scale === "original" || scale === "natural" || scale === "actual") {
     return (
       <div className="absolute inset-0 flex items-center justify-center bg-black">
+        {!painted && <LoadingOverlay />}
         {vid
           ? renderVideo("max-w-full max-h-full w-auto h-auto object-contain")
           : renderImage("max-w-full max-h-full w-auto h-auto object-contain")}
@@ -156,16 +191,19 @@ export default function SlotMedia({
             ? renderVideo(
                 "w-full h-full object-cover blur-lg scale-[1.05]",
                 false,
-                true
+                true,
+                false
               )
             : renderImage(
                 "w-full h-full object-cover blur-lg scale-[1.05]",
+                false,
                 false
               )}
           <div className="absolute inset-0 bg-black/25" />
         </div>
 
         <div className="absolute inset-0 flex items-center justify-center">
+          {!painted && <LoadingOverlay />}
           {vid
             ? renderVideo("max-w-full max-h-full w-auto h-auto object-contain")
             : renderImage("max-w-full max-h-full w-auto h-auto object-contain")}
@@ -176,6 +214,7 @@ export default function SlotMedia({
 
   return (
     <div className="absolute inset-0 bg-black">
+      {!painted && <LoadingOverlay />}
       {vid
         ? renderVideo(`w-full h-full ${fitClass(scale)}`)
         : renderImage(`w-full h-full ${fitClass(scale)}`)}
