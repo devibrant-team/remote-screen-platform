@@ -4,6 +4,7 @@ import { useCreateScreen } from "../ReactQuery/CreateScreen/CreateScreen";
 import { echo } from "../echo";
 import { useNavigate } from "react-router-dom";
 import { saveAuthToken } from "../utils/deviceState";
+import { handleReverbEventSafetyCheck } from "../utils/backgroundSyncSafety";
 
 /* ──────────────────────────────────────────────────────────────
   Types & Constants
@@ -282,6 +283,7 @@ export default function CreateScreen() {
       const expected = expectedIdRef.current?.toString();
       const eventId = e?.screen_id?.toString();
       const token = typeof e?.screenToken === "string" ? e.screenToken.trim() : "";
+        void handleReverbEventSafetyCheck("ScreenLinked");
 
       // Assumption: .ScreenLinked sends screenToken and may omit screen_id.
       // The backend event definition is not present in this Windows checkout.

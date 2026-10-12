@@ -23,6 +23,12 @@ import { currentNetMode, type NetMode } from "../../utils/netHealth";
 import { useSlideLogic } from "../../Hook/Player/useSlideLogic"; 
 import { useSchedulePlaylistTimeline } from "../../Hook/Player/useSchedulePlaylistTimeline"; 
 import { usePlaylistHealth } from "../../Hook/Player/usePlaylistHealth";
+import { useServerClockStrict } from "../../utils/useServerClockStrict";
+import {
+  evaluateDriftCorrection,
+  calculateExpectedSlideOffsetSec,
+  type VideoSyncTelemetry,
+} from "../../utils/videoDriftPolicy";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 
@@ -50,6 +56,9 @@ export default function PlaylistPlayer({
   activeSchedule,
 }: Props) {
   const qc = useQueryClient();
+  const clock = useServerClockStrict();
+  const lastHardSeekTimeRef = useRef<Record<string | number, number>>({});
+  const lastTelemetryRef = useRef<VideoSyncTelemetry | null>(null);
 
   const slides = useMemo(
     () =>
@@ -78,7 +87,8 @@ export default function PlaylistPlayer({
     slides as any,
     childStartTime,
     scheduleStartDate,
-    serverDate ?? null
+    serverDate ?? null,
+    (playlist as any)?.sync_anchor_ms ?? 0
   );
 
   // 🔁 Timeline كامل للـ schedule + playlist (loopات)
@@ -228,6 +238,124 @@ export default function PlaylistPlayer({
 
     lastSeekPerSlide.current[slideKey] = clamped;
   }, [slideLogic.enabled, slideLogic.offsetInSlide, activeIndex, slides, pruneVideoRefs]);
+
+  // 🔄 Continuous Intra-Slide Video Drift Correction Loop
+  useEffect(() => {
+    if (!slideLogic.enabled || !slides.length) return;
+
+    const intervalId = window.setInterval(() => {
+      const currentSlide = slides[activeIndex] as PlaylistSlide | undefined;
+      if (!currentSlide) return;
+
+      pruneVideoRefs(currentSlide.id);
+      const vids = videoRefs.current[currentSlide.id] || [];
+      if (!vids.length) return;
+
+      // Recalculate fresh expected offset from the server timeline
+      const expected = calculateExpectedSlideOffsetSec(
+        slides as any,
+        clock,
+        childStartTime,
+        scheduleStartDate,
+        serverDate,
+        (playlist as any)?.sync_anchor_ms ?? 0
+      );
+
+      if (!expected || expected.expectedSlideIndex !== activeIndex) {
+        return;
+      }
+
+      const expectedTimeSec = expected.expectedOffsetSec;
+      const nowMs = performance.now();
+      const slideKey = currentSlide.id ?? activeIndex;
+      const lastHardSeek = lastHardSeekTimeRef.current[slideKey] || 0;
+
+      vids.forEach((v) => {
+        if (!v || !v.isConnected || v.ended) return;
+
+        const isReady = v.readyState >= 2;
+        const isBuffering = v.readyState < 3 && !v.paused;
+        const isSeeking = v.seeking;
+        const isPaused = v.paused;
+        const actualTimeSec = v.currentTime;
+        const videoDurationSec =
+          Number.isFinite(v.duration) && v.duration > 0
+            ? v.duration
+            : (currentSlide.duration || 0);
+
+        const action = evaluateDriftCorrection({
+          expectedTimeSec,
+          actualTimeSec,
+          videoDurationSec,
+          isReady,
+          isSeeking,
+          isBuffering,
+          isPaused,
+          lastHardSeekMs: lastHardSeek,
+          currentNowMs: nowMs,
+        });
+
+        if (action.type === "in_sync") {
+          if (v.playbackRate !== 1.0) {
+            v.playbackRate = 1.0;
+          }
+        } else if (action.type === "rate_adjust") {
+          if (v.playbackRate !== action.targetRate) {
+            v.playbackRate = action.targetRate;
+          }
+        } else if (action.type === "hard_seek") {
+          try {
+            v.currentTime = action.targetTimeSec;
+            if (v.playbackRate !== 1.0) v.playbackRate = 1.0;
+            lastHardSeekTimeRef.current[slideKey] = nowMs;
+          } catch {}
+        }
+
+        // Diagnostics telemetry
+        const telemetry: VideoSyncTelemetry = {
+          platform: "windows",
+          playlistId: playlist?.id,
+          slideId: currentSlide.id,
+          expectedVideoTimeMs: Math.round(expectedTimeSec * 1000),
+          actualVideoTimeMs: Math.round(actualTimeSec * 1000),
+          driftMs: "driftMs" in action ? action.driftMs : Math.round((expectedTimeSec - actualTimeSec) * 1000),
+          correctionType: action.type,
+          playbackRate: v.playbackRate,
+          buffering: isBuffering,
+          lastHardSeekAt: lastHardSeek || null,
+          updatedAt: Date.now(),
+        };
+        lastTelemetryRef.current = telemetry;
+        (window as any).__iguanaVideoSyncTelemetry = telemetry;
+      });
+    }, 400);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    slideLogic.enabled,
+    slides,
+    activeIndex,
+    clock,
+    childStartTime,
+    scheduleStartDate,
+    serverDate,
+    playlist?.id,
+    pruneVideoRefs,
+  ]);
+
+  // Restore playbackRate to 1.0 on slide transitions
+  useEffect(() => {
+    Object.values(videoRefs.current).forEach((list) => {
+      list.forEach((v) => {
+        try {
+          if (v && v.isConnected && v.playbackRate !== 1.0) {
+            v.playbackRate = 1.0;
+          }
+        } catch {}
+      });
+    });
+  }, [activeIndex]);
+
 
   // external "skip once" event
   useEffect(() => {

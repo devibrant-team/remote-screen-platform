@@ -216,3 +216,76 @@ export function buildSchedulePlaylistTimeline(
     loops,
   };
 }
+
+/** Positive modulo: handles negative and large numbers correctly */
+export function positiveModulo(val: number, mod: number): number {
+  if (mod <= 0) return 0;
+  return ((val % mod) + mod) % mod;
+}
+
+/** Normalized slide duration in milliseconds */
+export function normalizeSlideDurationMs(duration?: number | null): number {
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
+    return 0;
+  }
+  return Math.round(duration * 1000);
+}
+
+export type DeterministicPlaylistPhase = {
+  slideIndex: number;
+  offsetInSlideSec: number;
+  msUntilNextSlide: number | null;
+  loopElapsedMs: number;
+  totalDurationMs: number;
+};
+
+/**
+ * Deterministically resolves the active slide index and intra-slide offset
+ * given normalized slide durations (ms) and elapsed milliseconds from a shared anchor.
+ */
+export function resolveDeterministicPlaylistPhase(
+  slideDurationsMs: number[],
+  elapsedMs: number
+): DeterministicPlaylistPhase {
+  const totalDurationMs = slideDurationsMs.reduce((sum, d) => sum + d, 0);
+  if (totalDurationMs <= 0 || slideDurationsMs.length === 0) {
+    return {
+      slideIndex: 0,
+      offsetInSlideSec: 0,
+      msUntilNextSlide: null,
+      loopElapsedMs: 0,
+      totalDurationMs: 0,
+    };
+  }
+
+  const loopElapsedMs = positiveModulo(elapsedMs, totalDurationMs);
+  let accMs = 0;
+
+  for (let i = 0; i < slideDurationsMs.length; i++) {
+    const durMs = slideDurationsMs[i];
+    const endMs = accMs + durMs;
+
+    if (loopElapsedMs < endMs) {
+      const offsetMs = loopElapsedMs - accMs;
+      const remainingMs = Math.max(0, durMs - offsetMs);
+
+      return {
+        slideIndex: i,
+        offsetInSlideSec: offsetMs / 1000,
+        msUntilNextSlide: remainingMs,
+        loopElapsedMs,
+        totalDurationMs,
+      };
+    }
+    accMs += durMs;
+  }
+
+  return {
+    slideIndex: slideDurationsMs.length - 1,
+    offsetInSlideSec: 0,
+    msUntilNextSlide: null,
+    loopElapsedMs,
+    totalDurationMs,
+  };
+}
+

@@ -24,6 +24,20 @@ const signage = {
 
   resetDevice: (): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("signage:resetDevice"),
+
+  getClockCalibration: (): Promise<any> =>
+    ipcRenderer.invoke("signage:getClockCalibration"),
+
+  saveClockCalibration: (cal: any): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("signage:saveClockCalibration", cal),
+
+  onPowerResume: (cb: () => void): (() => void) => {
+    const handler = () => cb();
+    ipcRenderer.on("system:power-resume", handler);
+    return () => {
+      ipcRenderer.removeListener("system:power-resume", handler);
+    };
+  },
 };
 
 const mediaCache = {

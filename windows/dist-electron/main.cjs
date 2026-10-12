@@ -36,7 +36,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-// electron/main.ts
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
 const node_url_1 = require("node:url");
@@ -507,9 +506,29 @@ async function createWindow() {
     // ✅ Start auto updater AFTER window is ready
     win.on("closed", () => (win = null));
 }
+function setupPowerMonitor() {
+    try {
+        electron_1.powerMonitor.on("resume", () => {
+            electron_log_1.default.info("[powerMonitor] System resumed from sleep/suspend");
+            if (win && !win.isDestroyed()) {
+                win.webContents.send("system:power-resume");
+            }
+        });
+        electron_1.powerMonitor.on("suspend", () => {
+            electron_log_1.default.info("[powerMonitor] System suspended");
+            if (win && !win.isDestroyed()) {
+                win.webContents.send("system:power-suspend");
+            }
+        });
+    }
+    catch (err) {
+        electron_log_1.default.error("[powerMonitor] Failed to setup powerMonitor listeners", err);
+    }
+}
 electron_1.app.whenReady().then(async () => {
     startMediaProxy();
     registerAppShortcuts(isDev);
+    setupPowerMonitor();
     await createWindow();
 });
 // ✅ NEW: stop keep-awake on quit
@@ -581,5 +600,22 @@ electron_1.ipcMain.handle("signage:resetDevice", async (evt) => {
     assertTrustedRenderer(evt);
     const store = await getStore();
     store.clear();
+    return { ok: true };
+});
+electron_1.ipcMain.handle("signage:getClockCalibration", async (evt) => {
+    assertTrustedRenderer(evt);
+    const store = await getStore();
+    const raw = store.get("clockCalibration");
+    if (!raw || typeof raw !== "object")
+        return null;
+    return raw;
+});
+electron_1.ipcMain.handle("signage:saveClockCalibration", async (evt, calibration) => {
+    assertTrustedRenderer(evt);
+    if (!calibration || typeof calibration !== "object") {
+        throw new TypeError("Invalid clock calibration payload");
+    }
+    const store = await getStore();
+    store.set("clockCalibration", calibration);
     return { ok: true };
 });

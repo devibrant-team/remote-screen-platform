@@ -10,6 +10,15 @@ const signage = {
     saveAuthToken: (token) => electron_1.ipcRenderer.invoke("signage:saveAuthToken", token),
     clearAuthToken: () => electron_1.ipcRenderer.invoke("signage:clearAuthToken"),
     resetDevice: () => electron_1.ipcRenderer.invoke("signage:resetDevice"),
+    getClockCalibration: () => electron_1.ipcRenderer.invoke("signage:getClockCalibration"),
+    saveClockCalibration: (cal) => electron_1.ipcRenderer.invoke("signage:saveClockCalibration", cal),
+    onPowerResume: (cb) => {
+        const handler = () => cb();
+        electron_1.ipcRenderer.on("system:power-resume", handler);
+        return () => {
+            electron_1.ipcRenderer.removeListener("system:power-resume", handler);
+        };
+    },
 };
 const mediaCache = {
     mapToLocal: async (urls) => {

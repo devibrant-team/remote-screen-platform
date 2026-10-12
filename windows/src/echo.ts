@@ -3,6 +3,7 @@ import Echo from "laravel-echo";
 import Pusher from "pusher-js";
 import { reverbConfig } from "./config/serverConfig";
 import { saveAuthToken } from "./utils/deviceState";
+import { handleReverbEventSafetyCheck } from "./utils/backgroundSyncSafety";
 
 declare global {
   interface Window {
@@ -46,7 +47,10 @@ const handleStateChange = ({
 };
 
 // Specific events you might want to log
-const handleConnected = () => console.log("[Reverb] ✅ Connected");
+const handleConnected = () => {
+  console.log("[Reverb] ✅ Connected");
+  void handleReverbEventSafetyCheck("ReverbConnected");
+};
 const handleConnecting = () => console.log("[Reverb] ⏳ Connecting...");
 const handleDisconnected = () => console.log("[Reverb] ❌ Disconnected");
 const handleUnavailable = () => console.log("[Reverb] ⚠ Unavailable");
@@ -227,7 +231,7 @@ export function subscribeScreenChannel(
 
   const handler = async (e: any) => {
     console.log(`[Reverb] ScheduleUpdate received on ${channelName}`);
-    console.log(`[Reverb] 🔢 Event belongs to screenId: ${idStr}`);
+    void handleReverbEventSafetyCheck("ScheduleUpdate");
     await persistAuthTokenFromEvent(e);
     onScheduleUpdate(e);
   };
@@ -281,10 +285,8 @@ export function subscribeScreenDeletedChannel(
   console.log(`[Reverb] 🎧 Subscribing to ScreenDeleted on: ${channelName}`);
 
   const handler = (e: any) => {
-    console.log(
-      `[Reverb] 🧨 ScreenDeleted received on ${channelName}`,
-      e
-    );
+    console.log(`[Reverb] ScreenDeleted received on ${channelName}`, e);
+    void handleReverbEventSafetyCheck("ScreenDeleted");
     onDeleted(e);
   };
 
@@ -357,7 +359,7 @@ export function subscribeScreenTypeChannel(
   const handler = (e: any) => {
     const type = normalizeScreenType(e?.type);
     console.log(`[Reverb] ScreenType event received on ${channelName}`);
-    console.log(`[Reverb] 🧭 normalized type:`, type);
+    void handleReverbEventSafetyCheck("ScreenType");
     if (type) onType(type, e);
   };
 
@@ -455,6 +457,7 @@ export function subscribeScreenRefreshChannel(
 
   const handler = (e: any) => {
     console.log(`[Reverb] ScreenRefresh event received on ${channelName}`);
+    void handleReverbEventSafetyCheck("ScreenRefresh");
     onRefresh(e);
   };
 

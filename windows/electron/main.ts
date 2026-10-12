@@ -1,5 +1,4 @@
-// electron/main.ts
-import { app, BrowserWindow, ipcMain, powerSaveBlocker, globalShortcut, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, globalShortcut, safeStorage, powerMonitor } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -537,9 +536,29 @@ async function createWindow() {
   win.on("closed", () => (win = null));
 }
 
+function setupPowerMonitor() {
+  try {
+    powerMonitor.on("resume", () => {
+      log.info("[powerMonitor] System resumed from sleep/suspend");
+      if (win && !win.isDestroyed()) {
+        win.webContents.send("system:power-resume");
+      }
+    });
+    powerMonitor.on("suspend", () => {
+      log.info("[powerMonitor] System suspended");
+      if (win && !win.isDestroyed()) {
+        win.webContents.send("system:power-suspend");
+      }
+    });
+  } catch (err) {
+    log.error("[powerMonitor] Failed to setup powerMonitor listeners", err);
+  }
+}
+
 app.whenReady().then(async () => {
   startMediaProxy();
   registerAppShortcuts(isDev);
+  setupPowerMonitor();
   await createWindow();
 });
 
@@ -621,3 +640,22 @@ ipcMain.handle("signage:resetDevice", async (evt) => {
   store.clear();
   return { ok: true };
 });
+
+ipcMain.handle("signage:getClockCalibration", async (evt) => {
+  assertTrustedRenderer(evt);
+  const store = await getStore();
+  const raw = store.get("clockCalibration" as any);
+  if (!raw || typeof raw !== "object") return null;
+  return raw;
+});
+
+ipcMain.handle("signage:saveClockCalibration", async (evt, calibration) => {
+  assertTrustedRenderer(evt);
+  if (!calibration || typeof calibration !== "object") {
+    throw new TypeError("Invalid clock calibration payload");
+  }
+  const store = await getStore();
+  store.set("clockCalibration" as any, calibration);
+  return { ok: true };
+});
+

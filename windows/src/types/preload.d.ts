@@ -11,6 +11,9 @@ declare global {
       saveAuthToken: (token: string) => Promise<{ ok: boolean }>;
       clearAuthToken: () => Promise<{ ok: boolean }>;
       resetDevice: () => Promise<{ ok: boolean }>;
+      getClockCalibration?: () => Promise<any>;
+      saveClockCalibration?: (cal: any) => Promise<{ ok: boolean }>;
+      onPowerResume?: (cb: () => void) => () => void;
     };
     iguana: {
       pingServer: (address: string, port: number) => Promise<boolean>;

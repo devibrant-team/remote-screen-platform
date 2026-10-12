@@ -1,4 +1,5 @@
 // src/utils/deviceState.ts
+import { type ClockCalibration, validateCalibrationPayload } from "./clockEngine";
 export const LS_SCREEN_ID = "screenId";
 export const LS_LINKED = "linked";
 export const LS_TOKEN = "authToken";
@@ -65,4 +66,58 @@ export function loadDeviceStateSync() {
   const screenId = localStorage.getItem("screenId") || undefined;
   const linked = localStorage.getItem("linked") === "1";
   return { screenId, linked };
+}
+
+export const LS_CLOCK_CALIBRATION = "clockCalibration";
+
+export async function getClockCalibration(): Promise<ClockCalibration | null> {
+  const api = window.signage;
+  try {
+    if (api?.getClockCalibration) {
+      const stored = await api.getClockCalibration();
+      if (stored) {
+        const validated = validateCalibrationPayload(stored);
+        if (validated) return validated;
+      }
+    }
+  } catch (err) {
+    console.warn("[deviceState] Failed to get clock calibration via IPC:", err);
+  }
+
+  // Fallback to localStorage (for web / dev mode)
+  try {
+    const raw = localStorage.getItem(LS_CLOCK_CALIBRATION);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return validateCalibrationPayload(parsed);
+    }
+  } catch {}
+
+  return null;
+}
+
+export async function saveClockCalibration(cal: ClockCalibration): Promise<boolean> {
+  const validated = validateCalibrationPayload(cal);
+  if (!validated) return false;
+
+  const api = window.signage;
+  try {
+    if (api?.saveClockCalibration) {
+      const res = await api.saveClockCalibration(validated);
+      if (res?.ok === true) {
+        localStorage.removeItem(LS_CLOCK_CALIBRATION);
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn("[deviceState] Failed to save clock calibration via IPC:", err);
+  }
+
+  // Fallback to localStorage
+  try {
+    localStorage.setItem(LS_CLOCK_CALIBRATION, JSON.stringify(validated));
+    return true;
+  } catch {
+    return false;
+  }
 }

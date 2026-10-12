@@ -64,7 +64,7 @@ function msUntilDateTimeSmart(
   targetTime?: string | null
 ): number | undefined {
   if (!today || !targetDate || !targetTime) return undefined;
-  if (!clock.isReady()) return undefined;
+  if (!clock.canSchedule()) return undefined;
 
   const nowSec = clock.nowSecs();
   const targetSec = toSecs(targetTime);
@@ -83,7 +83,7 @@ export function useResolvedPlaylist(screenId?: string) {
   // 🧠 نجيب parent schedules مباشرة
   const parent = useParentSchedules(screenId);
 
-  const day = parent.data?.date;
+  const day = parent.data?.date ?? clock.serverDate() ?? undefined;
   const items = useMemo(() => parent.data?.data ?? [], [parent.data?.data]);
 
   // ⏱️ tick محلي سريع (كل 100ms) لنعيد حساب الـ active حسب ساعة السيرفر
@@ -102,7 +102,7 @@ export function useResolvedPlaylist(screenId?: string) {
       return { active: undefined, next: null };
     }
 
-    if (!clock.isReady()) {
+    if (!clock.canSchedule()) {
       return { active: undefined, next: null };
     }
 
@@ -177,7 +177,7 @@ export function useResolvedPlaylist(screenId?: string) {
   useEffect(() => {
     if (!next) return;
     if (!screenId) return;
-    if (!clock.isReady()) return;
+    if (!clock.canSchedule()) return;
 
     const sid = nextScheduleId;
     const startTime = pickStr(next, "start_time");
