@@ -38,17 +38,8 @@ export function usePlaylistHealth(opts: Options) {
     loopIndexRef.current = 0;
   }, [opts.scheduleId, opts.source]);
 
-  const reportGlitch = (slideId?: string | number, reason?: string) => {
+  const reportGlitch = () => {
     hasGlitchInLoop.current = true;
-
-    // if (process.env.NODE_ENV !== "production") {
-    //   console.log("[PlaylistHealth] glitch detected", {
-    //     slideId,
-    //     reason,
-    //     scheduleId: opts.scheduleId,
-    //     source: opts.source,
-    //   });
-    // }
   };
 
   /**
@@ -56,8 +47,7 @@ export function usePlaylistHealth(opts: Options) {
    * ويعلِم الحارس بأي glitch
    */
   const registerVideoGuard = (
-    videoEl: HTMLVideoElement | null,
-    slideId?: string | number
+    videoEl: HTMLVideoElement | null
   ) => {
     if (!videoEl) return;
 
@@ -69,9 +59,9 @@ export function usePlaylistHealth(opts: Options) {
       } catch {}
     }
 
-    const onWaiting = () => reportGlitch(slideId, "waiting");
-    const onStalled = () => reportGlitch(slideId, "stalled");
-    const onError = () => reportGlitch(slideId, "error");
+    const onWaiting = () => reportGlitch();
+    const onStalled = () => reportGlitch();
+    const onError = () => reportGlitch();
 
     videoEl.addEventListener("waiting", onWaiting);
     videoEl.addEventListener("stalled", onStalled);

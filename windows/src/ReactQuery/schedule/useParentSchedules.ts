@@ -10,13 +10,12 @@ import type {
 import { qk } from "../../ReactQuery/queryKeys";
 import { useServerClockStrict } from "../../utils/useServerClockStrict";
 import { resolveActiveAndNext } from "../../utils/scheduleTime";
-
-export const LS_TOKEN = "authToken";
+import { getAuthToken } from "../../utils/deviceState";
 
 export async function fetchParentSchedules(
   screenId: string
 ): Promise<ParentScheduleResponse> {
-  const token = localStorage.getItem(LS_TOKEN) ?? "";
+  const token = (await getAuthToken()) ?? "";
   const { data } = await axios.get<ParentScheduleResponse>(
     `${GetParentScheduleApi()}/${screenId}`,
     { headers: token ? { Authorization: `Bearer ${token}` } : undefined }

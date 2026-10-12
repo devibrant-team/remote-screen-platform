@@ -3,7 +3,7 @@ import axios from "axios";
 import { useQuery } from "@tanstack/react-query";
 import { GetChildPlaylistApi } from "../../Api/Api";
 import type { ChildPlaylistResponse } from "../../types/schedule";
-import { LS_TOKEN } from "./useParentSchedules";
+import { getAuthToken } from "../../utils/deviceState";
 import { qk } from "../../ReactQuery/queryKeys";
 
 /** Normalize any common server shapes to { playlist: { slides: [...] } } */
@@ -39,7 +39,7 @@ export async function fetchChildPlaylist(
   scheduleId: number | string,
   screenId?: number | string
 ): Promise<ChildPlaylistResponse> {
-  const token = localStorage.getItem(LS_TOKEN) ?? "";
+  const token = (await getAuthToken()) ?? "";
   const { data } = await axios.get(`${GetChildPlaylistApi()}/${scheduleId}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     params: screenId ? { screen_id: screenId } : undefined,

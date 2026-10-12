@@ -20,7 +20,6 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import GridLayout from "./GridLayout";
 import { currentNetMode, type NetMode } from "../../utils/netHealth";
-import PlaylistDebugPanel from "./PlaylistDebugPanel";
 import { useSlideLogic } from "../../Hook/Player/useSlideLogic"; 
 import { useSchedulePlaylistTimeline } from "../../Hook/Player/useSchedulePlaylistTimeline"; 
 import { usePlaylistHealth } from "../../Hook/Player/usePlaylistHealth";
@@ -83,7 +82,7 @@ export default function PlaylistPlayer({
   );
 
   // 🔁 Timeline كامل للـ schedule + playlist (loopات)
-  const scheduleTimeline = useSchedulePlaylistTimeline({
+  useSchedulePlaylistTimeline({
     scheduleId: resolvedScheduleId,
     schedule: activeSchedule,
     slides: slides as PlaylistSlide[],
@@ -137,27 +136,9 @@ export default function PlaylistPlayer({
   }, []);
 
   // ⏱️ تايمر محلي فقط للـ debug (ما بيحرّك next أبداً)
-  const [localSlideElapsed, setLocalSlideElapsed] = useState(0);
-
   const lastSeekPerSlide = useRef<Record<string | number, number>>({});
 
-  useEffect(() => {
-    const start = performance.now();
-    setLocalSlideElapsed(0);
-
-    const id = window.setInterval(() => {
-      const now = performance.now();
-      setLocalSlideElapsed((now - start) / 1000);
-    }, 100);
-
-    return () => window.clearInterval(id);
-  }, [activeIndex]);
-
   // ⏱️ التوقيت الفعّال للشريحة
-  const slideElapsed = slideLogic.enabled
-    ? slideLogic.offsetInSlide
-    : localSlideElapsed;
-
   const slideTo = (idx: number) => {
     if (!slides.length) return;
     const target = (idx + slides.length) % slides.length;
@@ -314,7 +295,7 @@ export default function PlaylistPlayer({
         v.crossOrigin = "anonymous";
         v.style.willChange = "transform, opacity";
         // ربط الفيديو مع حارس الـhealth
-        health.registerVideoGuard(v, slide.id);
+        health.registerVideoGuard(v);
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
       } catch {}
@@ -344,7 +325,7 @@ export default function PlaylistPlayer({
     if (!list.includes(el)) list.push(el);
 
     // نسجل الفيديو مع الحارس مباشرة
-    health.registerVideoGuard(el, slideId);
+    health.registerVideoGuard(el);
   };
 
   // Reverb للتحكم عن بعد
@@ -368,8 +349,8 @@ export default function PlaylistPlayer({
         slideTo(activeIndex - 1);
       };
 
-      const handleReload = (e: any) => {
-        persistAuthTokenFromEvent(e);
+      const handleReload = async (e: any) => {
+        await persistAuthTokenFromEvent(e);
         if (onRequestRefetch) {
           onRequestRefetch();
           return;
@@ -506,9 +487,7 @@ export default function PlaylistPlayer({
               <GridLayout
                 slide={s}
                 onVideoRef={(el) => registerVideo(s.id, el)}
-                onMediaFailure={(_slot, reason) =>
-                  health.reportGlitch(s.id, reason)
-                }
+                onMediaFailure={() => health.reportGlitch()}
                 gap={0}
               />
             </div>

@@ -29,9 +29,12 @@ async function createScreenRequest(): Promise<CreateScreenResponse> {
 
 // Save to Electron's persistent store (via preload API)
 async function saveToDevice(screenId: string) {
-  const api = (window as any)?.signage;
+  const api = window.signage;
   if (api?.saveScreenId) {
-    try { await api.saveScreenId(screenId); } catch { /* ignore */ }
+    const result = await api.saveScreenId(screenId);
+    if (result?.ok !== true) {
+      throw new Error("Could not persist the paired screen ID");
+    }
   }
 }
 
@@ -43,9 +46,9 @@ export function useCreateScreen(
   return useMutation<CreateScreenResponse, AxiosError, void>({
     mutationKey: ["createScreen"],
     mutationFn: createScreenRequest,
-    onSuccess: async (data, variables, context) => {
+    onSuccess: async (data, variables, context, mutationContext) => {
       await saveToDevice(data.screenId);       // <-- auto-save to electron-store
-      onSuccess?.(data, variables, context);   // <-- still allow custom handler
+      onSuccess?.(data, variables, context, mutationContext);   // <-- still allow custom handler
     },
     ...rest,
   });

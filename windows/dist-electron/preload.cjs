@@ -5,6 +5,10 @@ const electron_1 = require("electron");
 const signage = {
     getDeviceState: () => electron_1.ipcRenderer.invoke("signage:getDeviceState"),
     saveScreenId: (screenId) => electron_1.ipcRenderer.invoke("signage:saveScreenId", screenId),
+    setLinked: (linked) => electron_1.ipcRenderer.invoke("signage:setLinked", linked),
+    getAuthToken: () => electron_1.ipcRenderer.invoke("signage:getAuthToken"),
+    saveAuthToken: (token) => electron_1.ipcRenderer.invoke("signage:saveAuthToken", token),
+    clearAuthToken: () => electron_1.ipcRenderer.invoke("signage:clearAuthToken"),
     resetDevice: () => electron_1.ipcRenderer.invoke("signage:resetDevice"),
 };
 const mediaCache = {
@@ -23,9 +27,13 @@ const updater = {
     },
 };
 const iguana = {
-    pingServer: (address) => electron_1.ipcRenderer.invoke("ping-server", address),
+    pingServer: (address, port) => electron_1.ipcRenderer.invoke("ping-server", address, port),
+};
+const serverConfig = {
+    configureMediaProxy: (host, port) => electron_1.ipcRenderer.invoke("media-proxy:configure-server", host, port),
 };
 electron_1.contextBridge.exposeInMainWorld("signage", signage);
 electron_1.contextBridge.exposeInMainWorld("mediaCache", mediaCache);
 electron_1.contextBridge.exposeInMainWorld("updater", updater);
 electron_1.contextBridge.exposeInMainWorld("iguana", iguana);
+electron_1.contextBridge.exposeInMainWorld("serverConfig", serverConfig);

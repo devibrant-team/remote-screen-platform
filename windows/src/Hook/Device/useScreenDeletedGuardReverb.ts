@@ -39,11 +39,8 @@ export function useScreenDeletedGuardReverb(
       console.log("[Del] ✅ Subscribed to", DeleteChannel);
     });
 
-    const handler = async (event: any) => {
-      console.log("[Del] 🔥 ScreenDeleted event received:", {
-        channel: DeleteChannel,
-        payload: event,
-      });
+    const handler = async (_event: any) => {
+      console.log("[Del] ScreenDeleted event received:", DeleteChannel);
 
       // ✅ toast بدل alert
       toastAlert(

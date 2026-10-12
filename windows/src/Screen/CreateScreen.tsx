@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCreateScreen } from "../ReactQuery/CreateScreen/CreateScreen";
 import { echo } from "../echo";
 import { useNavigate } from "react-router-dom";
+import { saveAuthToken } from "../utils/deviceState";
 
 /* ──────────────────────────────────────────────────────────────
   Types & Constants
@@ -196,6 +197,7 @@ export default function CreateScreen() {
       .then((s: DeviceState) => {
         const screenId = s?.screenId ?? lsScreenId;
         const linked = s?.linked ?? lsLinked;
+        if (s?.linked == null && lsLinked) void api.setLinked?.(true).catch(() => {});
         setDeviceState({ screenId, linked });
 
         const hasExistingId = Boolean(screenId);
@@ -232,10 +234,6 @@ export default function CreateScreen() {
     if (!data?.screenId) return;
 
     const screenIdStr = String(data.screenId);
-    // persist to optional bridge API
-    const api = (window as any)?.signage;
-    api?.saveScreenId?.(screenIdStr).catch(() => {});
-
     // persist to localStorage
     localStorage.setItem(LS_SCREEN_ID, screenIdStr);
 
@@ -275,7 +273,7 @@ export default function CreateScreen() {
     const channelName = `code.${pairingCode}`;
     const channel = echo.channel(channelName);
 
-    const handler = (e: {
+    const handler = async (e: {
       screen_id?: number | string;
       next_url?: string;
       screenToken?: string;
@@ -283,26 +281,43 @@ export default function CreateScreen() {
     }) => {
       const expected = expectedIdRef.current?.toString();
       const eventId = e?.screen_id?.toString();
+      const token = typeof e?.screenToken === "string" ? e.screenToken.trim() : "";
 
-      // Accept if ids match, or if backend emits only a token without id
+      // Assumption: .ScreenLinked sends screenToken and may omit screen_id.
+      // The backend event definition is not present in this Windows checkout.
       const accept =
-        (expected && eventId === expected) || (!eventId && !!e?.screenToken);
+        (expected && eventId === expected) || (!eventId && !!token);
 
       if (!accept) {
         console.warn("[pairing] ignored: expected", expected, "got", eventId);
         return;
       }
 
-      if (e?.screenToken) {
-        localStorage.setItem(LS_TOKEN, String(e.screenToken));
-        console.log("[pairing] ✅ Saved screenToken:", e.screenToken);
+      if (!token || !window.signage?.saveAuthToken) {
+        console.error("[pairing] ignored: event is missing a usable token or secure storage");
+        return;
+      }
+      try {
+        await saveAuthToken(token);
+      } catch {
+        console.error("[pairing] Could not securely persist authentication token");
+        return;
       }
       if (e?.screenName) {
         localStorage.setItem("screenName", String(e.screenName));
         console.log("[pairing] ✅ Saved screenName:", e.screenName);
       }
-      const api = (window as any)?.signage;
-      api?.setLinked?.(true).catch(() => {});
+      const api = window.signage;
+      try {
+        const result = await api?.setLinked?.(true);
+        if (result?.ok !== true) {
+          console.error("[pairing] Could not persist linked device state");
+          return;
+        }
+      } catch {
+        console.error("[pairing] Could not persist linked device state");
+        return;
+      }
       localStorage.setItem(LS_LINKED, "1");
       window.dispatchEvent(new Event("iguana:linked"));
       setTimeout(() => {
@@ -334,14 +349,19 @@ export default function CreateScreen() {
   }, [pairingCode, deviceState?.linked, navigate]);
 
   /* 7) Reset flow (also leaves echo channel) */
-  const handleReset = () => {
+  const handleReset = async () => {
     try {
       unsubRef.current?.();
     } catch {}
     unsubRef.current = null;
 
     const api = (window as any)?.signage;
-    api?.resetDevice?.().catch(() => {});
+    try {
+      await api?.resetDevice?.();
+    } catch {
+      console.error("[pairing] Could not clear persisted device credentials");
+      return;
+    }
     localStorage.removeItem(LS_SCREEN_ID);
     localStorage.removeItem(LS_LINKED);
     localStorage.removeItem(LS_TOKEN);

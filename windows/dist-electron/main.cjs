@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // electron/main.ts
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
+const node_url_1 = require("node:url");
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_http_1 = __importDefault(require("node:http"));
 const node_net_1 = __importDefault(require("node:net"));
@@ -52,14 +53,8 @@ const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, "index.json");
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 const MEDIA_PROXY_PORT = Number(process.env.MEDIA_PROXY_PORT || 17654);
 const MEDIA_PROXY_HOST = "127.0.0.1";
-const MEDIA_PROXY_ALLOWED_HOSTS = new Set([
-    "192.168.10.16",
-    process.env.VITE_REVERB_HOST,
-    process.env.MEDIA_SERVER_HOST,
-    process.env.SERVER_HOST,
-]
-    .filter(Boolean)
-    .map((host) => String(host).trim().toLowerCase()));
+let mediaProxyAllowedHost = null;
+let mediaProxyAllowedPort = 8000;
 const MEDIA_PROXY_EXPOSED_HEADERS = [
     "content-type",
     "content-length",
@@ -72,12 +67,21 @@ function normalizeServerAddress(address) {
         .replace(/\/+$/, "")
         .trim();
 }
-function pingServerAddress(address) {
+function isValidServerHost(hostname) {
+    const host = hostname.trim().toLowerCase();
+    if (!host || host.length > 253 || host === "localhost")
+        return false;
+    if (node_net_1.default.isIP(host))
+        return true;
+    return host.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+function pingServerAddress(address, port) {
     const host = normalizeServerAddress(address);
-    if (!host)
+    if (!isValidServerHost(host) || !Number.isInteger(port) || port < 1 || port > 65535) {
         return Promise.resolve(false);
+    }
     return new Promise((resolve) => {
-        const socket = node_net_1.default.createConnection({ host, port: 8000 });
+        const socket = node_net_1.default.createConnection({ host, port });
         let settled = false;
         const finish = (ok) => {
             if (settled)
@@ -100,15 +104,9 @@ function addMediaProxyCorsHeaders(res) {
     res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
     res.setHeader("Accept-Ranges", "bytes");
 }
-function isPrivateLanHost(hostname) {
+function isConfiguredMediaHost(hostname) {
     const host = hostname.toLowerCase();
-    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host))
-        return true;
-    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host))
-        return true;
-    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host))
-        return true;
-    return MEDIA_PROXY_ALLOWED_HOSTS.has(host);
+    return host === mediaProxyAllowedHost && host !== "localhost" && host !== "127.0.0.1";
 }
 function parseAllowedMediaUrl(value) {
     if (!value)
@@ -119,7 +117,10 @@ function parseAllowedMediaUrl(value) {
             return null;
         if (!target.pathname.includes("/storage/"))
             return null;
-        if (!isPrivateLanHost(target.hostname))
+        if (!isConfiguredMediaHost(target.hostname))
+            return null;
+        const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+        if (port !== mediaProxyAllowedPort)
             return null;
         return target;
     }
@@ -174,7 +175,7 @@ function startMediaProxy() {
             const remote = await fetch(targetUrl.toString(), {
                 method: req.method,
                 headers,
-                redirect: "follow",
+                redirect: "error",
                 signal: abort.signal,
             });
             copyMediaHeaders(remote, res);
@@ -233,6 +234,18 @@ function sizeOf(file) {
 function totalSize(ix) {
     return Object.values(ix).reduce((a, r) => a + (r.s || 0), 0);
 }
+function encryptAuthToken(token) {
+    if (!electron_1.safeStorage.isEncryptionAvailable()) {
+        throw new Error("Secure credential storage is unavailable on this device");
+    }
+    return electron_1.safeStorage.encryptString(token).toString("base64");
+}
+function decryptAuthToken(value) {
+    if (!electron_1.safeStorage.isEncryptionAvailable()) {
+        throw new Error("Secure credential storage is unavailable on this device");
+    }
+    return electron_1.safeStorage.decryptString(Buffer.from(value, "base64"));
+}
 async function evictIfNeeded(ix) {
     let sz = totalSize(ix);
     if (sz <= MAX_BYTES)
@@ -288,8 +301,18 @@ electron_1.ipcMain.handle("media-cache:map", async (_evt, urls) => {
     saveIndex(ix);
     return results;
 });
-electron_1.ipcMain.handle("ping-server", async (_evt, address) => {
-    return pingServerAddress(address);
+electron_1.ipcMain.handle("ping-server", async (_evt, address, port) => {
+    return pingServerAddress(address, port);
+});
+electron_1.ipcMain.handle("media-proxy:configure-server", async (evt, host, port) => {
+    assertTrustedRenderer(evt);
+    const normalizedHost = normalizeServerAddress(host).toLowerCase();
+    if (!isValidServerHost(normalizedHost) || !Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new TypeError("Invalid media server configuration");
+    }
+    mediaProxyAllowedHost = normalizedHost;
+    mediaProxyAllowedPort = port;
+    return { ok: true };
 });
 async function getStore() {
     const mod = await Promise.resolve().then(() => __importStar(require("electron-store")));
@@ -300,6 +323,24 @@ async function getStore() {
 }
 let win = null;
 const isDev = !electron_1.app.isPackaged;
+function assertTrustedRenderer(event) {
+    const frameUrl = event.senderFrame?.url;
+    if (!frameUrl)
+        throw new Error("Untrusted IPC sender");
+    if (frameUrl.startsWith("file://")) {
+        const actual = node_path_1.default.resolve((0, node_url_1.fileURLToPath)(frameUrl));
+        const expected = node_path_1.default.resolve(electron_1.app.getAppPath(), "dist", "index.html");
+        if (actual === expected)
+            return;
+    }
+    else if (isDev && process.env.ELECTRON_START_URL) {
+        const senderOrigin = new URL(frameUrl).origin;
+        const configuredOrigin = new URL(process.env.ELECTRON_START_URL).origin;
+        if (senderOrigin === configuredOrigin)
+            return;
+    }
+    throw new Error("Untrusted IPC sender");
+}
 function registerAppShortcuts(isDev) {
     try {
         // -------------------
@@ -490,17 +531,54 @@ electron_1.app.on("activate", () => {
 /* ──────────────────────────────────────────────────────────────
    IPC: device state
 ────────────────────────────────────────────────────────────── */
-electron_1.ipcMain.handle("signage:getDeviceState", async () => {
+electron_1.ipcMain.handle("signage:getDeviceState", async (evt) => {
+    assertTrustedRenderer(evt);
     const store = await getStore();
-    const { code, screenId } = store.store;
-    return { code, screenId };
+    const { code, screenId, linked } = store.store;
+    return { code, screenId, linked: typeof linked === "boolean" ? linked : undefined };
 });
-electron_1.ipcMain.handle("signage:saveScreenId", async (_e, screenId) => {
+electron_1.ipcMain.handle("signage:saveScreenId", async (evt, screenId) => {
+    assertTrustedRenderer(evt);
     const store = await getStore();
     store.set("screenId", screenId);
     return { ok: true };
 });
-electron_1.ipcMain.handle("signage:resetDevice", async () => {
+electron_1.ipcMain.handle("signage:setLinked", async (evt, linked) => {
+    assertTrustedRenderer(evt);
+    if (typeof linked !== "boolean")
+        throw new TypeError("linked must be a boolean");
+    const store = await getStore();
+    store.set("linked", linked);
+    return { ok: true };
+});
+electron_1.ipcMain.handle("signage:getAuthToken", async (evt) => {
+    assertTrustedRenderer(evt);
+    const store = await getStore();
+    const encrypted = store.get("authTokenEncrypted");
+    if (!encrypted)
+        return undefined;
+    if (typeof encrypted !== "string") {
+        throw new Error("Stored credential has an invalid format");
+    }
+    return decryptAuthToken(encrypted);
+});
+electron_1.ipcMain.handle("signage:saveAuthToken", async (evt, token) => {
+    assertTrustedRenderer(evt);
+    if (typeof token !== "string" || token.length === 0 || token.length > 8192) {
+        throw new TypeError("Invalid authentication token");
+    }
+    const store = await getStore();
+    store.set("authTokenEncrypted", encryptAuthToken(token));
+    return { ok: true };
+});
+electron_1.ipcMain.handle("signage:clearAuthToken", async (evt) => {
+    assertTrustedRenderer(evt);
+    const store = await getStore();
+    store.delete("authTokenEncrypted");
+    return { ok: true };
+});
+electron_1.ipcMain.handle("signage:resetDevice", async (evt) => {
+    assertTrustedRenderer(evt);
     const store = await getStore();
     store.clear();
     return { ok: true };

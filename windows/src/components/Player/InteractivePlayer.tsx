@@ -141,8 +141,8 @@ export default function InteractivePlayer({
       const handleNext = () => next();
       const handlePrev = () => prev();
 
-      const handleReload = (e: any) => {
-        persistAuthTokenFromEvent(e);
+      const handleReload = async (e: any) => {
+        await persistAuthTokenFromEvent(e);
         if (onRequestRefetch) return onRequestRefetch();
 
         if (screenId) {

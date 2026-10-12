@@ -3,7 +3,7 @@ import axios from "axios";
 import { useQuery } from "@tanstack/react-query";
 import { DefaultPlayListApi } from "../../Api/Api";
 import type { ChildPlaylistResponse } from "../../types/schedule";
-import { LS_TOKEN } from "./useParentSchedules";
+import { getAuthToken } from "../../utils/deviceState";
 import { qk } from "../../ReactQuery/queryKeys";
 
 /** Normalizes any known server shape to ChildPlaylistResponse */
@@ -30,7 +30,7 @@ function normalizeDefaultResp(raw: any): ChildPlaylistResponse {
 export async function fetchDefaultPlaylist(
   screenId: number | string
 ): Promise<ChildPlaylistResponse> {
-  const token = localStorage.getItem(LS_TOKEN) ?? "";
+  const token = (await getAuthToken()) ?? "";
   const { data } = await axios.get(`${DefaultPlayListApi()}/${screenId}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });

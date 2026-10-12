@@ -1,7 +1,7 @@
 // src/utils/useServerClockStrict.ts
 import { useEffect, useMemo, useState } from "react";
 import { TimeClockApi } from "../Api/Api";
-import { loadDeviceStateSync } from "./deviceState";
+import { getAuthToken, loadDeviceStateSync } from "./deviceState";
 import { showServerToast } from "./serverClockToast";
 
 type ServerReply = {
@@ -22,7 +22,6 @@ type State = {
   lastDriftSec: number;
 };
 
-const SEC = 1000;
 const DAY_SEC = 86400;
 
 // كل قدّيش نعمل resync دوري (بعد ما يصير في server time)
@@ -150,8 +149,8 @@ function ensureServerOrAlert() {
   if (now - engineStartEpoch < 30_000) return;
 
   if (!engineState && !noServerTimeAlertShown) {
-    const { linked, token } = loadDeviceStateSync();
-    if (!linked || !token) return;
+    const { linked } = loadDeviceStateSync();
+    if (!linked) return;
 
     noServerTimeAlertShown = true;
 
@@ -170,7 +169,7 @@ function ensureServerOrAlert() {
  */
 async function takeOneSampleNtp(): Promise<Sample | null> {
   try {
-    const token = localStorage.getItem("authToken") ?? "";
+    const token = (await getAuthToken()) ?? "";
     if (!token) {
       return null;
     }
@@ -305,7 +304,7 @@ async function bestOfNSamples(n: number): Promise<EngineState | null> {
   };
 }
 
-async function singleSync(label: string) {
+async function singleSync() {
   const sample = await bestOfNSamples(3);
   if (!sample) {
     notifySubscribers();
@@ -347,52 +346,61 @@ async function singleSync(label: string) {
   notifySubscribers();
 }
 
-async function guardedSync(label: string) {
+async function guardedSync() {
   if (syncInFlight) return;
   syncInFlight = true;
   try {
-    await singleSync(label);
+    await singleSync();
   } finally {
     syncInFlight = false;
   }
 }
 
-function ensureEngineStarted() {
-  if (engineStarted) return;
+let engineStartPending = false;
+async function ensureEngineStarted() {
+  if (engineStarted || engineStartPending) return;
 
-  const { screenId, linked, token } = loadDeviceStateSync();
-  if (!linked || !screenId || !token) {
-    return;
+  const { screenId, linked } = loadDeviceStateSync();
+  if (!linked || !screenId) return;
+  engineStartPending = true;
+  let token: string | undefined;
+  try {
+    token = await getAuthToken();
+  } catch (error) {
+    console.error("Secure authentication token unavailable; server clock is paused", error);
+  } finally {
+    engineStartPending = false;
   }
+  if (!token || engineStarted) return;
 
   engineStarted = true;
   engineStartEpoch = Date.now();
 
-  void guardedSync("INIT");
+  void guardedSync();
 
   if (typeof window !== "undefined") {
     setInterval(() => {
       if (!engineState || engineState.syncCount <= 0) {
         ensureServerOrAlert();
-        void guardedSync("RETRY");
+        void guardedSync();
       }
     }, 30_000);
   }
 
   setInterval(() => {
     if (engineState && engineState.syncCount > 0) {
-      void guardedSync("PERIODIC");
+      void guardedSync();
     }
   }, resyncEveryMs);
 
   if (typeof window !== "undefined") {
     window.addEventListener("online", () => {
-      void guardedSync("ONLINE");
+      void guardedSync();
     });
 
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
-        void guardedSync("VISIBLE");
+        void guardedSync();
       }
     });
   }
@@ -403,9 +411,9 @@ function ensureEngineStarted() {
 export function useServerClockStrict() {
   const [, forceRender] = useState(0);
   useEffect(() => {
-    ensureEngineStarted();
+    void ensureEngineStarted();
 
-    const onLinked = () => ensureEngineStarted();
+    const onLinked = () => void ensureEngineStarted();
     window.addEventListener("iguana:linked", onLinked);
 
     const cb = () => forceRender((x) => x + 1);

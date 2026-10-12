@@ -46,14 +46,14 @@ export function useScreenRefreshReverbWeb() {
       return;
     }
 
-    unsubRef.current = subscribeScreenRefreshChannel(screenId, async (payload) => {
+    unsubRef.current = subscribeScreenRefreshChannel(screenId, async (_payload) => {
       if (!alive) return;
       if (firedRef.current) return;
       firedRef.current = true;
 
       const ok = canHardReload(8000);
       if (!ok) {
-        console.log("[WebRefresh] skip reload (cooldown)", { screenId, payload });
+        console.log("[WebRefresh] skip reload (cooldown)", screenId);
         firedRef.current = false;
         return;
       }

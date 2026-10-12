@@ -3,7 +3,6 @@ import "swiper/css";
 import "swiper/css/effect-fade";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import SmartPlayer from "../components/Player/SmartPlayer";
 import { useScreenId } from "../Hook/Device/useScreenId";
 import { echo, persistAuthTokenFromEvent, ReverbConnection } from "../echo";
@@ -86,15 +85,13 @@ async function warmPlaylistLight(
 const PREWARM_LEAD_MS = 10 * 60 * 1000;
 
 const HomeScreen: React.FC = () => {
-  const qc = useQueryClient();
-  const { screenId } = useScreenId();
+  const { screenId, linked, token } = useScreenId();
   // 👇 هنا نستدعي الـ hook الجديد
   useScreenDeletedGuardReverb(screenId);
 
   const {
     parent,
     active,
-    next,
     activeScheduleId,
     decision,
     isLoading,
@@ -107,11 +104,7 @@ const HomeScreen: React.FC = () => {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
   const [reverbStatus, setReverbStatus] = useState(ReverbConnection.status);
-const canWriteNowPlaying = () => {
-  const linked = localStorage.getItem("linked") === "1";
-  const token = localStorage.getItem("authToken");
-  return linked && !!token;
-};
+  const canWriteNowPlaying = () => Boolean(linked && token);
 
 
   useEffect(() => {
@@ -279,7 +272,7 @@ const canWriteNowPlaying = () => {
         ? "child"
         : "default";
     setNowPlaying(source, current);
-  }, [current, decision.playlist, decisionSource]);
+  }, [current, decision.playlist, decisionSource, linked, token]);
 
   const quietRefresh = useCallback(async (
     overrideScheduleId?: number | string | null,
@@ -345,8 +338,8 @@ const canWriteNowPlaying = () => {
     const channelName = `screens.${screenId}`;
     const channel = echo.channel(channelName);
 
-    const handleEvent = (label: string) => (payload: ScheduleUpdatePayload) => {
-      console.log("[Reverb] raw payload", payload);
+    const handleEvent = (label: string) => async (payload: ScheduleUpdatePayload) => {
+      console.log(`[Reverb] ${label} event received`);
 
       const sid = normalizeScheduleId(
         payload,
@@ -361,9 +354,7 @@ const canWriteNowPlaying = () => {
         scheduleId: sid,
       });
 
-      try {
-        persistAuthTokenFromEvent?.(payload);
-      } catch {}
+      await persistAuthTokenFromEvent?.(payload);
 
       void quietRefresh(sid, "reverb");
     };
@@ -433,7 +424,7 @@ const canWriteNowPlaying = () => {
       setNowPlaying("default", def!); // ✅ guarded
     }
     })();
-  }, [activeEndDelayMs, isOnline, netMode]);
+  }, [activeEndDelayMs, isOnline, netMode, linked, token]);
 
   useEffect(() => {
     if (!isOnline) return;

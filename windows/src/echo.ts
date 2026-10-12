@@ -2,6 +2,7 @@
 import Echo from "laravel-echo";
 import Pusher from "pusher-js";
 import { reverbConfig } from "./config/serverConfig";
+import { saveAuthToken } from "./utils/deviceState";
 
 declare global {
   interface Window {
@@ -91,7 +92,7 @@ function createEcho(reason: string) {
     instanceId,
   });
 
-  const instance = new Echo({
+  const instance = new Echo<"reverb">({
     broadcaster: "reverb",
     key: reverb.key,
     wsHost: reverb.host,
@@ -194,11 +195,14 @@ export const ReverbConnection = {
     }
   },
 };
-export function persistAuthTokenFromEvent(payload: any) {
+export async function persistAuthTokenFromEvent(payload: any) {
   const token = payload?.token ?? payload?.auth_token;
   if (token) {
-    localStorage.setItem("authToken", String(token));
-    console.log("[Reverb] ✅ Saved token to localStorage");
+    try {
+      await saveAuthToken(String(token));
+    } catch {
+      console.error("[Reverb] Could not securely persist authentication token");
+    }
   }
 }
 
@@ -221,10 +225,10 @@ export function subscribeScreenChannel(
   console.log(`[Reverb] 🎧 Subscribing to channel: ${channelName}`);
   console.log(`[Reverb] 📺 Screen ID: ${idStr}`);
 
-  const handler = (e: any) => {
-    console.log(`[Reverb] 📩 ScheduleUpdate received on ${channelName}`, e);
+  const handler = async (e: any) => {
+    console.log(`[Reverb] ScheduleUpdate received on ${channelName}`);
     console.log(`[Reverb] 🔢 Event belongs to screenId: ${idStr}`);
-    persistAuthTokenFromEvent(e);
+    await persistAuthTokenFromEvent(e);
     onScheduleUpdate(e);
   };
 
@@ -352,7 +356,7 @@ export function subscribeScreenTypeChannel(
 
   const handler = (e: any) => {
     const type = normalizeScreenType(e?.type);
-    console.log(`[Reverb] 🧭 EVENT on ${channelName}`, e);
+    console.log(`[Reverb] ScreenType event received on ${channelName}`);
     console.log(`[Reverb] 🧭 normalized type:`, type);
     if (type) onType(type, e);
   };
@@ -450,7 +454,7 @@ export function subscribeScreenRefreshChannel(
   console.log("[Reverb] conn status now:", ReverbConnection.status);
 
   const handler = (e: any) => {
-    console.log(`[Reverb] 🔄 ScreenRefresh on ${channelName}`, e);
+    console.log(`[Reverb] ScreenRefresh event received on ${channelName}`);
     onRefresh(e);
   };
 

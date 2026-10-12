@@ -1,5 +1,5 @@
 // src/components/ServerClockToast.tsx
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 type ToastKind = "info" | "success" | "warning" | "error";
 
