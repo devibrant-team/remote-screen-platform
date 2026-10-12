@@ -1,7 +1,7 @@
 import type { PlaylistSlide, PlaylistSlot } from "../../types/schedule";
 import SlotMedia from "./SlotMedia";
 import { WidgetRenderer } from "../widgets/WidgetRenderer";
-import iguanaLogo from "../../assets/Logo.png";
+import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
 
 type GridSpec = { cols: number; rows: number };
 
@@ -161,12 +161,12 @@ export default function GridLayout({
                   <WidgetRenderer widget={(slot as any).widget as any} />
                 </>
               ) : (
-                <div className="flex w-full h-full items-center justify-center bg-black">
-                  <img
-                    src={iguanaLogo}
-                    alt="Iguana"
-                    className="h-10 w-10 object-contain opacity-90"
-                    draggable={false}
+                <div className="relative flex w-full h-full items-center justify-center bg-white">
+                  <PlayerLoadingOverlay
+                    visible
+                    mode="preparing_media"
+                    message="Preparing media..."
+                    subtle
                   />
                 </div>
               )}

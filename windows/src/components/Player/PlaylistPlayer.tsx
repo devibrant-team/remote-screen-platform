@@ -39,80 +39,6 @@ type Props = {
   activeSchedule?: ParentScheduleItem;
 };
 
-/** ينتظر أول فريم لفيديو معيّن (أو canplay/playing) بمهلة محددة — للـoverlay فقط */
-function waitForFirstFrame(vid: HTMLVideoElement, timeoutMs = 700) {
-  return new Promise<void>((resolve) => {
-    let done = false;
-
-    let timeoutId: number | null = null;
-    let cbId: number | null = null;
-
-    function cleanup() {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      if (vid) {
-        vid.removeEventListener("canplay", onCanPlay);
-        vid.removeEventListener("playing", onPlaying);
-        vid.removeEventListener("waiting", onWaiting);
-      }
-      if (cbId != null && (vid as any).cancelVideoFrameCallback) {
-        try {
-          (vid as any).cancelVideoFrameCallback(cbId);
-        } catch {}
-      }
-    }
-
-    const finish = () => {
-      if (!done) {
-        done = true;
-        cleanup();
-        resolve();
-      }
-    };
-
-    const onCanPlay = () => finish();
-    const onPlaying = () => finish();
-    const onWaiting = () => {
-      // هون بس للـoverlay، الـhealth الحقيقي جوّا usePlaylistHealth
-    };
-
-    if (!vid) {
-      finish();
-      return;
-    }
-
-    if (vid.readyState >= 2) {
-      finish();
-      return;
-    }
-
-    timeoutId = window.setTimeout(finish, timeoutMs);
-
-    const rVFC = (vid as any).requestVideoFrameCallback?.(() => finish());
-    cbId = (typeof rVFC === "number" ? rVFC : null) as number | null;
-
-    vid.addEventListener("canplay", onCanPlay, { once: true });
-    vid.addEventListener("playing", onPlaying, { once: true });
-    vid.addEventListener("waiting", onWaiting, { once: true });
-  });
-}
-
-/** ينتظر أول فريم للفيديو الأساسي ضمن عنصر شريحة — يؤثر فقط على الـoverlay */
-async function waitForPrimaryVideoReady(
-  container: HTMLElement | null,
-  timeoutMs = 700
-) {
-  if (!container) return;
-  const vid = container.querySelector("video") as HTMLVideoElement | null;
-  if (!vid) return;
-  try {
-    const p = vid.play();
-    if (p?.catch) p.catch(() => {});
-  } catch {}
-  await waitForFirstFrame(vid, timeoutMs);
-}
 
 export default function PlaylistPlayer({
   playlist,
@@ -209,8 +135,6 @@ export default function PlaylistPlayer({
       videoRefs.current = {};
     };
   }, []);
-
-  const [showOverlay, setShowOverlay] = useState(false);
 
   // ⏱️ تايمر محلي فقط للـ debug (ما بيحرّك next أبداً)
   const [localSlideElapsed, setLocalSlideElapsed] = useState(0);
@@ -532,12 +456,6 @@ export default function PlaylistPlayer({
       /> */}
 
       {/* Overlay لتغطية أي فجوة وجيزة أثناء الانتقال */}
-      <div
-        className={`pointer-events-none absolute inset-0 bg-white transition-opacity duration-150 ${
-          showOverlay ? "opacity-30" : "opacity-0"
-        }`}
-      />
-
       <Swiper
         modules={[EffectFade]}
         effect="fade"
@@ -548,12 +466,9 @@ export default function PlaylistPlayer({
           sw.slideTo(initialIndex);
         }}
         onSlideChange={(sw) => setActiveIndex(sw.activeIndex)}
-        onSlideChangeTransitionStart={async (sw) => {
+        onSlideChangeTransitionStart={(sw) => {
           // هذا الجزء فقط للـoverlay وسلاسة الانتقال — لا يلمس التايمر
           const target = sw.activeIndex;
-          const slideEl = sw.slides?.[target] as HTMLElement | undefined;
-          setShowOverlay(true);
-
           const targetSlide = slides[target];
           pruneVideoRefs(targetSlide?.id);
           const vidsTarget = videoRefs.current[targetSlide?.id || 0] || [];
@@ -567,12 +482,6 @@ export default function PlaylistPlayer({
             } catch {}
           });
 
-          if (vidsTarget.length) {
-            await waitForPrimaryVideoReady(slideEl || null, 700);
-          } else {
-            await new Promise((r) => setTimeout(r, 120));
-          }
-
           pruneVideoRefs();
           Object.entries(videoRefs.current).forEach(([sid, list]) => {
             if (Number(sid) !== targetSlide?.id)
@@ -582,8 +491,6 @@ export default function PlaylistPlayer({
                 } catch {}
               });
           });
-
-          setTimeout(() => setShowOverlay(false), 60);
         }}
         allowTouchMove={false}
         keyboard={{ enabled: false }}

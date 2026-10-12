@@ -10,6 +10,7 @@ import {
   saveServerIp,
 } from "./config/serverConfig";
 import { resetEchoForServerChange } from "./echo";
+import LoadingScreen from "./components/Loading/LoadingScreen";
 
 import "./index.css";
 
@@ -22,14 +23,6 @@ const MANUAL_CONNECT_ERROR =
   "Could not connect to the server. Please check the address and try again.";
 
 type AppState = "needs-config" | "checking-saved" | "checking-manual" | "ready";
-
-function LoadingScreen() {
-  return (
-    <div className="flex h-screen w-screen items-center justify-center bg-white">
-      <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-200 border-t-red-600" />
-    </div>
-  );
-}
 
 type ServerConnectScreenProps = {
   state: AppState;
@@ -58,7 +51,7 @@ function ServerConnectScreen({
   };
 
   return (
-    <div className="flex min-h-screen w-screen items-center justify-center bg-white px-5 py-8 text-zinc-950">
+    <div className="flex min-h-screen w-screen items-center justify-center bg-[#050505] px-5 py-8 text-zinc-950">
       <form
         onSubmit={submit}
         className="w-full max-w-md rounded-2xl border border-zinc-100 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.14)] sm:p-8"

@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query";
 import SmartPlayer from "../components/Player/SmartPlayer";
 import { useScreenId } from "../Hook/Device/useScreenId";
-import { echo, persistAuthTokenFromEvent } from "../echo";
+import { echo, persistAuthTokenFromEvent, ReverbConnection } from "../echo";
 import { useResolvedPlaylist } from "../Hook/Player/useResolvedPlaylist";
 import {
   setNowPlaying,
@@ -24,8 +24,9 @@ import { currentNetMode, type NetMode } from "../utils/netHealth";
 import HeadlessWarmup from "../components/Player/HeadlessWarmup";
 import type { PlaylistLoopHealthDetail } from "../Hook/Player/usePlaylistHealth";
 import { useScreenDeletedGuardReverb } from "../Hook/Device/useScreenDeletedGuardReverb";
-import NoSchedule from "../components/NoSchedule/NoSchedule";
-import LoadingScreen from "../components/Loading/LoadingScreen";
+import PlayerLoadingOverlay, {
+  type PlayerLoadingMode,
+} from "../components/Player/PlayerLoadingOverlay";
 
 type PlaylistT = ChildPlaylistResponse["playlist"];
 type ScheduleUpdatePayload = {
@@ -105,6 +106,7 @@ const HomeScreen: React.FC = () => {
 
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [netMode, setNetMode] = useState<NetMode>(currentNetMode());
+  const [reverbStatus, setReverbStatus] = useState(ReverbConnection.status);
 const canWriteNowPlaying = () => {
   const linked = localStorage.getItem("linked") === "1";
   const token = localStorage.getItem("authToken");
@@ -133,6 +135,8 @@ const canWriteNowPlaying = () => {
     const id = window.setInterval(tick, 4000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => ReverbConnection.onStatus(setReverbStatus), []);
 
   const bandwidthPlaylist =
     (decision?.playlist as PlaylistT | null) ||
@@ -212,6 +216,18 @@ const canWriteNowPlaying = () => {
 
     setNextPl(targetPlaylist);
     setNextReady(false);
+    console.log("[LOADING_STATE]", {
+      mode: "preparing_media",
+      reason: "playlist-switch",
+      hasActiveSlide: hasSlides(current),
+    });
+    if (hasSlides(current)) {
+      console.log("[KEEP_ACTIVE_VISIBLE]", {
+        reason: "playlist-switch-warmup",
+        oldPlaylistId,
+        newPlaylistId,
+      });
+    }
 
     (async () => {
       const winCount = netMode === "ONLINE_SLOW" ? 3 : 2;
@@ -453,16 +469,53 @@ const canWriteNowPlaying = () => {
     return () => cancel();
   }, [enableUpcomingWarm, targetPlaylist]);
 
-  if (!hasSlides(current) && isLoading) {
-    return (
-      <main className="w-screen h-[100dvh] grid place-items-center  text-white">
-        <LoadingScreen />
-      </main>
-    );
-  }
-
   const noRenderable =
     !hasSlides(current) && (!hasSlides(nextPl) || !nextReady);
+
+  const hasActiveContent = hasSlides(current) || (hasSlides(nextPl) && nextReady);
+  const isReconnecting =
+    !isOnline ||
+    reverbStatus === "connecting" ||
+    reverbStatus === "disconnected" ||
+    reverbStatus === "unavailable" ||
+    reverbStatus === "failed";
+  const pendingPlaylist = hasSlides(nextPl) && !nextReady;
+  const loadingMode: PlayerLoadingMode | null =
+    !hasSlides(current) && isLoading
+      ? "booting"
+      : noRenderable
+        ? "no_schedule"
+        : isReconnecting
+          ? isOnline
+            ? "reconnecting"
+            : "offline_cached"
+          : pendingPlaylist
+            ? "preparing_media"
+            : null;
+  const loadingMessage =
+    loadingMode === "booting"
+      ? "Preparing display..."
+      : loadingMode === "no_schedule"
+        ? "Waiting for schedule..."
+        : loadingMode === "preparing_media"
+          ? "Preparing media..."
+          : loadingMode
+            ? "Reconnecting..."
+            : undefined;
+
+  useEffect(() => {
+    if (!loadingMode) return;
+    console.log("[LOADING_STATE]", {
+      mode: loadingMode,
+      cornerOnly: hasActiveContent,
+      hasActiveSlide: hasActiveContent,
+      reverbStatus,
+      isOnline,
+    });
+    if (hasActiveContent) {
+      console.log("[KEEP_ACTIVE_VISIBLE]", { mode: loadingMode });
+    }
+  }, [loadingMode, hasActiveContent, reverbStatus, isOnline]);
 
   return (
     <main className="relative w-screen h-[100dvh] bg-white text-white overflow-hidden">
@@ -517,10 +570,15 @@ const canWriteNowPlaying = () => {
         </div>
       )}
 
-      {noRenderable && (
-        <div className="absolute inset-0 grid place-items-center bg-white text-white">
-          <NoSchedule />
-        </div>
+      {loadingMode && (
+        <PlayerLoadingOverlay
+          visible
+          mode={loadingMode}
+          message={loadingMessage}
+          cornerOnly={hasActiveContent}
+          showSkeleton={!hasActiveContent}
+          subtle={hasActiveContent}
+        />
       )}
 
       <div className="pointer-events-none absolute inset-0 bg-white/0" />
