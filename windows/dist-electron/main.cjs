@@ -36,6 +36,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const mediaStorageEngine_1 = require("./mediaStorage/mediaStorageEngine");
+const mediaDownloadQueue_1 = require("./mediaStorage/mediaDownloadQueue");
+const nodeFileSystemAdapter_1 = require("./mediaStorage/nodeFileSystemAdapter");
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
 const node_url_1 = require("node:url");
@@ -48,6 +51,13 @@ const node_util_1 = require("node:util");
 const streamPipeline = (0, node_util_1.promisify)(node_stream_1.pipeline);
 const electron_log_1 = __importDefault(require("electron-log"));
 const MEDIA_DIR = node_path_1.default.join(electron_1.app.getPath("userData"), "media-cache");
+const mediaStorage = new mediaStorageEngine_1.MediaStorageEngine({
+    baseDir: MEDIA_DIR,
+    quotaBytes: 2 * 1024 * 1024 * 1024,
+    fs: new nodeFileSystemAdapter_1.NodeFileSystemAdapter(),
+});
+const mediaDownloadQueue = new mediaDownloadQueue_1.MediaDownloadQueue(mediaStorage, { concurrency: 1 });
+mediaStorage.setDownloadQueue(mediaDownloadQueue);
 const INDEX_FILE = node_path_1.default.join(MEDIA_DIR, "index.json");
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 const MEDIA_PROXY_PORT = Number(process.env.MEDIA_PROXY_PORT || 17654);
@@ -147,6 +157,139 @@ function startMediaProxy() {
             return;
         }
         const requestUrl = new URL(req.url, `http://${MEDIA_PROXY_HOST}:${MEDIA_PROXY_PORT}`);
+        // Route: Chromium-compatible local media delivery with HTTP Range (RFC 7233)
+        if (requestUrl.pathname === "/local-media") {
+            if (req.method === "OPTIONS") {
+                res.writeHead(204).end();
+                return;
+            }
+            if (req.method !== "GET" && req.method !== "HEAD") {
+                res.writeHead(405).end("Method not allowed");
+                return;
+            }
+            const assetKey = requestUrl.searchParams.get("key");
+            const origUrl = requestUrl.searchParams.get("orig") || requestUrl.searchParams.get("url");
+            if (!assetKey && !origUrl) {
+                res.writeHead(400).end("Missing asset key or URL parameter");
+                return;
+            }
+            const lookupKey = assetKey || origUrl;
+            const record = mediaStorage.getAsset(lookupKey);
+            if (!record || record.status !== "completed" || !record.localPath) {
+                res.writeHead(404).end("Media asset not found or not completed in local cache");
+                return;
+            }
+            // Security restriction: strictly enforce that local file is inside MEDIA_DIR
+            const resolvedPath = node_path_1.default.resolve(record.localPath);
+            const resolvedMediaDir = node_path_1.default.resolve(MEDIA_DIR);
+            if (!resolvedPath.startsWith(resolvedMediaDir)) {
+                electron_log_1.default.warn("Blocked attempted path traversal in local media proxy:", resolvedPath);
+                res.writeHead(403).end("Forbidden: Access outside media cache directory");
+                return;
+            }
+            if (!node_fs_1.default.existsSync(resolvedPath)) {
+                res.writeHead(404).end("Local media file missing on disk");
+                return;
+            }
+            const stat = node_fs_1.default.statSync(resolvedPath);
+            const totalSize = stat.size;
+            const ext = node_path_1.default.extname(resolvedPath).toLowerCase();
+            const mimeTypes = {
+                ".mp4": "video/mp4",
+                ".webm": "video/webm",
+                ".mov": "video/quicktime",
+                ".mkv": "video/x-matroska",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".svg": "image/svg+xml",
+                ".mp3": "audio/mpeg",
+                ".wav": "audio/wav",
+            };
+            const contentType = mimeTypes[ext] || "application/octet-stream";
+            res.setHeader("Accept-Ranges", "bytes");
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+            const rangeHeader = req.headers.range;
+            if (rangeHeader) {
+                const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+                if (!match) {
+                    res.setHeader("Content-Range", `bytes */${totalSize}`);
+                    res.writeHead(416).end("Requested Range Not Satisfiable");
+                    return;
+                }
+                const rawStart = match[1];
+                const rawEnd = match[2];
+                let start = 0;
+                let end = totalSize - 1;
+                if (rawStart && rawEnd) {
+                    start = parseInt(rawStart, 10);
+                    end = parseInt(rawEnd, 10);
+                }
+                else if (rawStart) {
+                    start = parseInt(rawStart, 10);
+                    end = totalSize - 1;
+                }
+                else if (rawEnd) {
+                    start = totalSize - parseInt(rawEnd, 10);
+                    end = totalSize - 1;
+                }
+                if (isNaN(start) || isNaN(end) || start > end || start < 0 || end >= totalSize) {
+                    res.setHeader("Content-Range", `bytes */${totalSize}`);
+                    res.writeHead(416).end("Requested Range Not Satisfiable");
+                    return;
+                }
+                const contentLength = end - start + 1;
+                res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
+                res.setHeader("Content-Length", String(contentLength));
+                res.writeHead(206);
+                if (req.method === "HEAD") {
+                    res.end();
+                    return;
+                }
+                const releaseLease = mediaStorage.acquireReaderLease(record.assetKey);
+                let leaseReleased = false;
+                const safeRelease = () => {
+                    if (!leaseReleased) {
+                        leaseReleased = true;
+                        releaseLease();
+                    }
+                };
+                const stream = node_fs_1.default.createReadStream(resolvedPath, { start, end });
+                stream.pipe(res);
+                req.on("close", () => {
+                    stream.destroy();
+                    safeRelease();
+                });
+                res.on("finish", safeRelease);
+            }
+            else {
+                res.setHeader("Content-Length", String(totalSize));
+                res.writeHead(200);
+                if (req.method === "HEAD") {
+                    res.end();
+                    return;
+                }
+                const releaseLease = mediaStorage.acquireReaderLease(record.assetKey);
+                let leaseReleased = false;
+                const safeRelease = () => {
+                    if (!leaseReleased) {
+                        leaseReleased = true;
+                        releaseLease();
+                    }
+                };
+                const stream = node_fs_1.default.createReadStream(resolvedPath);
+                stream.pipe(res);
+                req.on("close", () => {
+                    stream.destroy();
+                    safeRelease();
+                });
+                res.on("finish", safeRelease);
+            }
+            return;
+        }
         if (requestUrl.pathname !== "/media-proxy") {
             res.writeHead(404).end("Not found");
             return;
@@ -273,32 +416,77 @@ async function downloadToFile(url, dst) {
    IPC: media cache
 ────────────────────────────────────────────────────────────── */
 electron_1.ipcMain.handle("media-cache:map", async (_evt, urls) => {
-    ensureDir();
-    const ix = loadIndex();
-    const results = {};
-    for (const url of urls) {
-        const k = keyFor(url);
-        const rec = ix[k];
-        if (rec && node_fs_1.default.existsSync(rec.p)) {
-            rec.t = Date.now();
-            results[url] = `file://${rec.p.replace(/\\/g, "/")}`;
-            continue;
-        }
-        const ext = node_path_1.default.extname(new URL(url).pathname) || "";
-        const dst = node_path_1.default.join(MEDIA_DIR, `${k}${ext}`);
-        try {
-            await downloadToFile(url, dst);
-            const s = sizeOf(dst);
-            ix[k] = { p: dst, s, t: Date.now() };
-            results[url] = `file://${dst.replace(/\\/g, "/")}`;
-        }
-        catch {
-            results[url] = url; // fallback
-        }
-    }
-    await evictIfNeeded(ix);
-    saveIndex(ix);
-    return results;
+    return mediaStorage.mapUrls(urls);
+});
+electron_1.ipcMain.handle("media-cache:getManifest", async () => {
+    return mediaStorage.getManifest();
+});
+electron_1.ipcMain.handle("media-cache:getAsset", async (_evt, urlOrKey) => {
+    return mediaStorage.getAsset(urlOrKey);
+});
+electron_1.ipcMain.handle("media-cache:setActiveAssets", async (_evt, urls) => {
+    await mediaStorage.setActiveAssets(urls);
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-cache:setProtectedAssets", async (_evt, source, urls) => {
+    await mediaStorage.setProtectedAssets(source, urls);
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-cache:acquireReaderLease", async (_evt, urlOrKey) => {
+    mediaStorage.acquireReaderLease(urlOrKey);
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-cache:releaseReaderLease", async (_evt, urlOrKey) => {
+    mediaStorage.releaseReaderLease(urlOrKey);
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-cache:cleanup", async (_evt, options) => {
+    return mediaStorage.performCleanup(options);
+});
+electron_1.ipcMain.handle("media-cache:getCleanupDiagnostics", async () => {
+    return mediaStorage.getCleanupDiagnostics();
+});
+electron_1.ipcMain.handle("media-cache:reconcile", async () => {
+    return mediaStorage.reconcileStartup();
+});
+electron_1.ipcMain.handle("media-cache:setQuota", async (_evt, bytes) => {
+    const result = await mediaStorage.setQuota(bytes);
+    return { ok: true, ...result };
+});
+electron_1.ipcMain.handle("media-cache:getStats", async () => {
+    return mediaStorage.getStorageStats();
+});
+electron_1.ipcMain.handle("media-cache:evict", async () => {
+    return mediaStorage.evictIfNeeded();
+});
+/* ── IPC: background media download queue ── */
+electron_1.ipcMain.handle("media-queue:enqueue", async (_evt, url, options) => {
+    return mediaDownloadQueue.enqueue(url, options);
+});
+electron_1.ipcMain.handle("media-queue:enqueuePlaylist", async (_evt, playlist, basePriority) => {
+    return mediaDownloadQueue.enqueuePlaylistMedia(playlist, basePriority);
+});
+electron_1.ipcMain.handle("media-queue:cancel", async (_evt, urlOrKey) => {
+    const ok = mediaDownloadQueue.cancelTask(urlOrKey) || mediaDownloadQueue.cancelUrl(urlOrKey);
+    return { ok };
+});
+electron_1.ipcMain.handle("media-queue:cancelAll", async () => {
+    mediaDownloadQueue.cancelAll();
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-queue:pause", async () => {
+    mediaDownloadQueue.pause();
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-queue:resume", async () => {
+    mediaDownloadQueue.resume();
+    return { ok: true };
+});
+electron_1.ipcMain.handle("media-queue:getStats", async () => {
+    return mediaDownloadQueue.getStats();
+});
+electron_1.ipcMain.handle("media-cache:purgeCorrupt", async () => {
+    return mediaStorage.purgeCorruptOrMissing();
 });
 electron_1.ipcMain.handle("ping-server", async (_evt, address, port) => {
     return pingServerAddress(address, port);

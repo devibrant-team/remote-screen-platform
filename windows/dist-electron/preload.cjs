@@ -24,6 +24,48 @@ const mediaCache = {
     mapToLocal: async (urls) => {
         return electron_1.ipcRenderer.invoke("media-cache:map", urls);
     },
+    getManifest: async () => {
+        return electron_1.ipcRenderer.invoke("media-cache:getManifest");
+    },
+    getAsset: async (urlOrKey) => {
+        return electron_1.ipcRenderer.invoke("media-cache:getAsset", urlOrKey);
+    },
+    setActiveAssets: async (urls) => {
+        return electron_1.ipcRenderer.invoke("media-cache:setActiveAssets", urls);
+    },
+    setProtectedAssets: async (source, urls) => {
+        return electron_1.ipcRenderer.invoke("media-cache:setProtectedAssets", source, urls);
+    },
+    acquireReaderLease: (urlOrKey) => {
+        return electron_1.ipcRenderer.invoke("media-cache:acquireReaderLease", urlOrKey);
+    },
+    releaseReaderLease: (urlOrKey) => {
+        return electron_1.ipcRenderer.invoke("media-cache:releaseReaderLease", urlOrKey);
+    },
+    cleanup: async (options) => {
+        return electron_1.ipcRenderer.invoke("media-cache:cleanup", options);
+    },
+    getCleanupDiagnostics: async () => {
+        return electron_1.ipcRenderer.invoke("media-cache:getCleanupDiagnostics");
+    },
+    reconcile: async () => {
+        return electron_1.ipcRenderer.invoke("media-cache:reconcile");
+    },
+    setQuota: async (quotaBytes) => {
+        return electron_1.ipcRenderer.invoke("media-cache:setQuota", quotaBytes);
+    },
+    getStats: async () => {
+        return electron_1.ipcRenderer.invoke("media-cache:getStats");
+    },
+    evict: async () => {
+        return electron_1.ipcRenderer.invoke("media-cache:evict");
+    },
+    purgeCorrupt: async () => {
+        return electron_1.ipcRenderer.invoke("media-cache:purgeCorrupt");
+    },
+    getLocalDeliveryUrl: (assetKey, originalUrl) => {
+        return `http://127.0.0.1:17654/local-media?key=${encodeURIComponent(assetKey)}${originalUrl ? `&orig=${encodeURIComponent(originalUrl)}` : ""}`;
+    },
 };
 // ✅ Auto Update bridge
 const updater = {
@@ -42,7 +84,17 @@ const serverConfig = {
     configureMediaProxy: (host, port) => electron_1.ipcRenderer.invoke("media-proxy:configure-server", host, port),
 };
 electron_1.contextBridge.exposeInMainWorld("signage", signage);
+const mediaQueue = {
+    enqueue: (url, options) => electron_1.ipcRenderer.invoke("media-queue:enqueue", url, options),
+    enqueuePlaylist: (playlist, basePriority) => electron_1.ipcRenderer.invoke("media-queue:enqueuePlaylist", playlist, basePriority),
+    cancel: (urlOrKey) => electron_1.ipcRenderer.invoke("media-queue:cancel", urlOrKey),
+    cancelAll: () => electron_1.ipcRenderer.invoke("media-queue:cancelAll"),
+    pause: () => electron_1.ipcRenderer.invoke("media-queue:pause"),
+    resume: () => electron_1.ipcRenderer.invoke("media-queue:resume"),
+    getStats: () => electron_1.ipcRenderer.invoke("media-queue:getStats"),
+};
 electron_1.contextBridge.exposeInMainWorld("mediaCache", mediaCache);
+electron_1.contextBridge.exposeInMainWorld("mediaQueue", mediaQueue);
 electron_1.contextBridge.exposeInMainWorld("updater", updater);
 electron_1.contextBridge.exposeInMainWorld("iguana", iguana);
 electron_1.contextBridge.exposeInMainWorld("serverConfig", serverConfig);

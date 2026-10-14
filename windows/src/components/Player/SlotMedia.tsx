@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { PlaylistSlot } from "../../types/schedule";
 import { normalizeMediaUrl } from "../../utils/mediaPrefetcher";
 import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
+import { useResolvedMediaSource } from "../../utils/mediaStorage/mediaResolver";
 
 type ScaleMode = "fit" | "fill" | "blur" | "original" | string;
 type MediaKind = "image" | "video";
@@ -130,9 +131,16 @@ export default function SlotMedia({
   const kind: MediaKind = vid ? "video" : "image";
   const url = slot.ImageFile || "";
 
+  const { resolvedUri, isLocal, hasFallback } = useResolvedMediaSource(url, {
+    slotId: slot.id,
+    mediaType: slot.mediaType,
+  });
+
+  const activeUrl = resolvedUri || url;
+
   const [retry, setRetry] = useState(0);
   const [failed, setFailed] = useState(false);
-  const src = normalizeMediaUrl(retryUrl(url, retry)) || "";
+  const src = normalizeMediaUrl(retryUrl(activeUrl, isLocal ? 0 : retry)) || "";
   const readyUrisRef = useRef<Set<string>>(new Set());
   const readyRef = useRef(src ? readyUrisRef.current.has(src) : false);
   const [showLoading, setShowLoading] = useState(() => !readyRef.current);
@@ -312,7 +320,13 @@ export default function SlotMedia({
     }, RETRY_DELAY_MS);
   };
 
-  if (failed) return <MediaFallback />;
+  useEffect(() => {
+    if (hasFallback) {
+      markPermanentFailure(`${kind}:offline-uncached`);
+    }
+  }, [hasFallback, kind]);
+
+  if (failed || hasFallback) return <MediaFallback />;
 
   const renderVideo = (
     className: string,

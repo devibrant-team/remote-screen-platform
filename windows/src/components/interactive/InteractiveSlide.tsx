@@ -2,6 +2,7 @@
 import React, { useMemo } from "react";
 import type { ButtonRect, ButtonAction } from "./buttonRegistry";
 import { PERCENTAGE_MODE } from "./buttonRegistry";
+import { useResolvedMediaSource } from "../../utils/mediaStorage/mediaResolver";
 
 export type InteractiveSlideData = {
   id: number;
@@ -51,10 +52,16 @@ export default function InteractiveSlide({
 }) {
   const btns = useMemo(() => buttons ?? [], [buttons]);
 
+  const { resolvedUri } = useResolvedMediaSource(slide?.url, {
+    slotId: slide?.id,
+    mediaType: "image",
+  });
+  const activeUri = resolvedUri || slide?.url || "";
+
   return (
     <div className="relative w-full h-full bg-white overflow-hidden select-none">
       <img
-        src={slide.url}
+        src={activeUri}
         alt={String(slide.mediaId)}
         className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none"
         draggable={false}

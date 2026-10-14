@@ -1,3 +1,4 @@
+import { mediaCacheClient, mediaQueueClient, DownloadPriority } from "../../utils/mediaStorage";
 // src/features/schedule/components/InteractivePlayer.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Swiper, SwiperSlide } from "swiper/react";
@@ -49,6 +50,21 @@ export default function InteractivePlayer({
     activeIndexRef.current = safeInitial;
     swiperRef.current?.slideTo?.(safeInitial, 0);
   }, [safeInitial]);
+
+  useEffect(() => {
+    if (!slides.length) return;
+    const allUrls = slides.map((sl) => sl.media).filter(Boolean) as string[];
+    if (allUrls.length > 0) {
+      mediaCacheClient.setProtectedAssets("interactive_playlist", allUrls).catch(() => {});
+      allUrls.forEach((u, i) => {
+        const priority = i === activeIndex ? DownloadPriority.ACTIVE_CURRENT : DownloadPriority.ACTIVE_UPCOMING;
+        mediaQueueClient.enqueue(u, { priority }).catch(() => {});
+      });
+    }
+    return () => {
+      mediaCacheClient.setProtectedAssets("interactive_playlist", []).catch(() => {});
+    };
+  }, [activeIndex, slides]);
 
   const slideTo = (idx: number) => {
     if (!slides.length) return;

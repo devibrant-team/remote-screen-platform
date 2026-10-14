@@ -16,6 +16,7 @@ import {
   getNowPlaying,
 } from "../../utils/playlistCache";
 import { prefetchWindow } from "../../utils/mediaPrefetcher";
+import { mediaCacheClient, mediaQueueClient, DownloadPriority } from "../../utils/mediaStorage";
 import { qk } from "../../ReactQuery/queryKeys";
 import { useServerClockStrict } from "../../utils/useServerClockStrict";
 import { resolveActiveAndNext, toSecs } from "../../utils/scheduleTime";
@@ -323,12 +324,54 @@ export function useResolvedPlaylist(screenId?: string) {
     defaultQ.data?.playlist,
   ]);
 
-  // Prefetch window من الشرائح للميديا (صور/فيديو) حسب الـ decision
+  // Prefetch window, auto-enqueue & protection management for active playlist
   useEffect(() => {
-    if (!hasSlides(decision.playlist)) return;
+    if (!hasSlides(decision.playlist)) {
+      mediaCacheClient.setProtectedAssets("current_playlist", []).catch(() => {});
+      return;
+    }
+    const currentUrls: string[] = [];
+    for (const s of decision.playlist.slides || []) {
+      for (const slot of s?.slots || []) {
+        if (slot?.ImageFile) currentUrls.push(slot.ImageFile);
+      }
+    }
+    mediaCacheClient.setProtectedAssets("current_playlist", currentUrls).catch(() => {});
     const cancel = prefetchWindow(decision.playlist.slides, 0, 2);
+    mediaQueueClient.enqueuePlaylist(decision.playlist, DownloadPriority.ACTIVE_CURRENT).catch(() => {});
     return () => cancel();
   }, [decision.playlist]);
+
+  // Background warmup & protection for default standby playlist
+  useEffect(() => {
+    if (defaultQ.data?.playlist && hasSlides(defaultQ.data.playlist)) {
+      const defaultUrls: string[] = [];
+      for (const s of defaultQ.data.playlist.slides || []) {
+        for (const slot of s?.slots || []) {
+          if (slot?.ImageFile) defaultUrls.push(slot.ImageFile);
+        }
+      }
+      mediaCacheClient.setProtectedAssets("default_playlist", defaultUrls).catch(() => {});
+      mediaQueueClient.enqueuePlaylist(defaultQ.data.playlist, DownloadPriority.OTHER_CACHED).catch(() => {});
+    } else {
+      mediaCacheClient.setProtectedAssets("default_playlist", []).catch(() => {});
+    }
+  }, [defaultQ.data?.playlist]);
+
+  // Protection for upcoming scheduled playlist
+  useEffect(() => {
+    if (!hasSlides(upcomingPlaylist)) {
+      mediaCacheClient.setProtectedAssets("upcoming_playlist", []).catch(() => {});
+      return;
+    }
+    const upcomingUrls: string[] = [];
+    for (const s of upcomingPlaylist.slides || []) {
+      for (const slot of s?.slots || []) {
+        if (slot?.ImageFile) upcomingUrls.push(slot.ImageFile);
+      }
+    }
+    mediaCacheClient.setProtectedAssets("upcoming_playlist", upcomingUrls).catch(() => {});
+  }, [upcomingPlaylist]);
 
   const activeScheduleIdFinal = activeScheduleId;
 
